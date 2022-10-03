@@ -42,7 +42,7 @@ s_shuffled1=pd.DataFrame(s_shuffled1)
 s_shuffled1=s_shuffled1.transpose()
 ```
 
-Now let us try to fit a Dirichlet Mixture Model to the data we have just created. There are different methods and initialization techniques available. 
+Now let us try to fit a Dirichlet Mixture Model to the data we have just created. There are different methods and initialization techniques available.
 
 Possible choices of methods are "meanprecision" and "fixedpoint".
 
@@ -74,7 +74,7 @@ model.fit() #To fit the model
 pi_hat, alpha_hat= model.get_params()
 ```
 
-    The estimated pi values are  [0.3791687065371422, 0.305294034907825, 0.2372298364091977, 0.07830742214583512]
+    The estimated pi values are  [0.3791510920699027, 0.305291232234975, 0.23724891767031334, 0.07830875802480888]
     The estimated alpha values are  [[14.426680889077614, 14.31890168542998, 4.453453467156408], [0.24233067680285156, 0.5479492716101892, 4.4378950314458905], [19.853177474165708, 19.98059620717043, 20.619761747567047], [10.894462473531632, 23.10056671037352, 51.236125582726714]]
 
 
@@ -86,8 +86,8 @@ print("AIC of the model is", model.aic())
 print("BIC of the model is", model.bic())
 ```
 
-    AIC of the model is 14.33428304536289
-    BIC of the model is 91.88607619710731
+    AIC of the model is 14.12176839212771
+    BIC of the model is 91.67356154387213
 
 
 If true labels of the data points are known, it is possible to get approximate measures such as accuracy, precision, recall and $F_1$ score.
@@ -108,4 +108,3 @@ print("F_1 score of the model is", f_score(s_shuffled['Initial_Clusters'], model
     Precision of the model is 0.9512083333333333
     Recall of the model is 0.9286522071560359
     F_1 score of the model is 0.9397949466881848
-
