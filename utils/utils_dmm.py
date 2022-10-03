@@ -91,7 +91,7 @@ def gmm_init_adv(data, k):
 
 def dmm_loglikelihood(pi_temp, alpha_temp, data_lol):
     n = len(data_lol)
-    k = len(data_lol[0])
+    k = len(alpha_temp)
     log_likelihood_values_temp = []
     for c in range(n):
         try:
