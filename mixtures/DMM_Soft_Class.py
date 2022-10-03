@@ -221,7 +221,6 @@ def estimate_alphas(data: np.ndarray, gamma_temp_ar, alpha_temp, method):
 
 
 class DMM_Soft:
-    global alpha_new, pi_new, mean, cluster
 
     def __init__(self, number_of_clusters, sample, method="meanprecision", initialization="KMeans", tol=0.0001):
         self.number_of_clusters = number_of_clusters
