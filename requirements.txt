@@ -1,0 +1,8 @@
+numpy
+pandas
+scipy
+sklearn
+math
+dirichlet
+sys
+copy
