@@ -1,6 +1,7 @@
 # Clustering Compositional Data using Dirichlet Mixture Model
 
 This article shows some basic functions available in the python package. The python package is based on the paper https://doi.org/10.1371/journal.pone.0268438
+The package also includes a Soft EM version of Dirichlet Mixture Model which is aimed to be published soon.
 
 ## Installation:
 
@@ -53,6 +54,8 @@ Possible choices of initialization are "KMeans", "GMM" and "random".
 # First import the DMM class
 
 from mixtures.DMM_Class import DMM
+
+# Similarly we could import Soft DMM by using the command "from mixtures.DMM_Soft_Class import DMM_Soft"
 
 #Let us initialize DMM with data and number of clusters along with default parameters.
 
