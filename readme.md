@@ -49,6 +49,7 @@ Possible choices of methods are "meanprecision" and "fixedpoint".
 
 Possible choices of initialization are "KMeans", "GMM" and "random".
 
+It is also possible to use both Soft and Hard versions of DMM.
 
 ```python
 # First import the DMM class
