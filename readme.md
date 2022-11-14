@@ -42,6 +42,10 @@ s_shuffled= s_copy.sample(frac=1)
 s_shuffled1=[s_shuffled[0],s_shuffled[1],s_shuffled[2]]
 s_shuffled1=pd.DataFrame(s_shuffled1)
 s_shuffled1=s_shuffled1.transpose()
+
+# If the data is not compositional, you can convert it to a compositional data by using the following code.
+# from utils.utils_dmm import multiplicative_replacement as mpr
+# data=pd.DataFrame(mpr(data))
 ```
 
 Now let us try to fit a Dirichlet Mixture Model to the data we have just created. There are different methods and initialization techniques available.
