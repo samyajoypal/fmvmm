@@ -5,6 +5,25 @@ from scipy.stats import dirichlet
 import math
 
 
+
+def multiplicative_replacement(d_mat, delta=None):
+    d_mat = closure(d_mat)
+    z_mat = (d_mat == 0)
+
+    num_feats = d_mat.shape[-1]
+    tot = z_mat.sum(axis=-1, keepdims=True)
+
+    if delta is None:
+        delta = (1. / num_feats)**2
+
+    zcnts = 1 - tot * delta
+    if np.any(zcnts) < 0:
+        raise ValueError('The multiplicative replacement created negative '
+                         'proportions. Consider using a smaller `delta`.')
+    d_mat = np.where(z_mat, delta, zcnts * d_mat)
+    return d_mat.squeeze()
+
+
 def kmeans_init(data, k):
     n = len(data)
     p = len(data.columns)
