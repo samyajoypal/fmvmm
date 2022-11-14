@@ -4,7 +4,16 @@ from sklearn import mixture
 from scipy.stats import dirichlet
 import math
 
-
+def closure(d_mat):
+    d_mat = np.atleast_2d(d_mat)
+    if np.any(d_mat < 0):
+        raise ValueError("Cannot have negative proportions")
+    if d_mat.ndim > 2:
+        raise ValueError("Input matrix can only have two dimensions or less")
+    if np.all(d_mat == 0, axis=1).sum() > 0:
+        raise ValueError("Input matrix cannot have rows with all zeros")
+    d_mat = d_mat / d_mat.sum(axis=1, keepdims=True)
+    return d_mat.squeeze()
 
 def multiplicative_replacement(d_mat, delta=None):
     d_mat = closure(d_mat)
