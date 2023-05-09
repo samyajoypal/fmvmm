@@ -3,6 +3,9 @@ from sklearn.cluster import KMeans
 from sklearn import mixture
 from scipy.stats import dirichlet
 import math
+import pandas as pd
+import conorm
+
 
 def closure(d_mat):
     d_mat = np.atleast_2d(d_mat)
@@ -165,3 +168,39 @@ def dmm_pi_estimate(gamma_temp_ar):
         pi_new.append(pi_temp)
         nk.append(nk_temp)
     return pi_new
+
+
+def count_to_comp(df):
+    df_array=np.array(df)
+
+
+    nf  = conorm.tmm_norm_factors(df)["norm.factors"]
+
+    lj=[]
+    for j in range(df_array.shape[1]):
+        lj_temp=nf[j]*np.sum(df_array[:, j])
+        lj.append(lj_temp)
+        
+
+    sj=[]
+    for j in range(df_array.shape[1]):
+        sj_temp=lj[j]/(np.sum(lj)/df_array.shape[1])
+        sj.append(sj_temp)
+
+    x_lol=[]
+    for i in range(df_array.shape[0]):
+        xi=[]
+        for j in range(df_array.shape[1]):
+            xi_temp=df_array[i,j]/sj[j]
+            xi.append(xi_temp)
+        xi_sum=np.sum(xi)
+        xi_trans=[xi[k]/xi_sum for k in range(df_array.shape[1])]
+       
+            
+        x_lol.append(xi_trans)
+        #x_lol.append(xi)
+        
+    data=pd.DataFrame(x_lol)
+    trans_data=pd.DataFrame(multiplicative_replacement(data))
+    
+    return trans_data

@@ -87,3 +87,4 @@ def mixture_clusters(gamma_matrix, data_lol):
         cluster.append(max_prob_c)
 
     return cluster, data_cwise
+

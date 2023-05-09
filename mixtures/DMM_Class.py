@@ -66,7 +66,7 @@ class DMM:
             log_likelihood_new = dmm_loglikelihood(
                 pi_new, alpha_new, self.data_lol)
 
-            log_like_diff = abs(log_likelihood_new-log_likelihood_old)
+            log_like_diff = abs(log_likelihood_new-log_likelihood_old)/log_likelihood_old
             estimated_mean = []
             for a in alpha_new:
                 mean_temp = [b/np.sum(a) for b in a]
@@ -74,7 +74,7 @@ class DMM:
 
             self.alpha_temp = alpha_new
             self.pi_temp = pi_new
-            #print(log_like_diff)
+            print(log_like_diff)
         self.pi_new = pi_new
         self.alpha_new = alpha_new
         self.estimated_mean = estimated_mean
@@ -113,8 +113,21 @@ class DMM:
 
     def bic(self):
 
-        return ((self.k-1)+(self.k*self.p))*np.log(self.n) - 2*np.log(self.log_likelihood_new)
+        return ((self.k-1)+(self.k*self.p))*np.log(self.n) - 2*(self.log_likelihood_new)
 
     def aic(self):
 
-        return 2*((self.k-1)+(self.k*self.p)) - 2*np.log(self.log_likelihood_new)
+        return 2*((self.k-1)+(self.k*self.p)) - 2*(self.log_likelihood_new)
+    
+    def icl(self):
+        entropy_s=[]
+        for i in self.gamma_matrix:
+            for j in i:
+                    ent_temp=j*np.log1p(j)
+                    entropy_s.append(ent_temp)
+                     
+                     
+        
+        entropy=np.sum(entropy_s)
+        
+        return ((self.k-1)+(self.k*self.p))*np.log(self.n) - 2*(self.log_likelihood_new) - entropy
