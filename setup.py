@@ -5,6 +5,7 @@ setup(
     version='1.0',
     author='Samyajoy Pal',
     author_email='palsamyajoy@gmail.com',
+    long_description="mixture model with different distributions",
     packages=find_packages(),
     install_requires=[
         'numpy',
