@@ -270,6 +270,7 @@ class DMM_Soft:
                 pi_new, alpha_new, self.data_lol)
 
             log_like_diff = abs(log_likelihood_new-log_likelihood_old)/log_likelihood_old
+            #log_like_diff = abs(log_likelihood_new-log_likelihood_old)
             estimated_mean = []
             for a in alpha_new:
                 mean_temp = [b/np.sum(a) for b in a]
@@ -277,7 +278,7 @@ class DMM_Soft:
 
             self.alpha_temp = alpha_new
             self.pi_temp = pi_new
-            print(log_like_diff)
+            #print(log_like_diff)
         self.pi_new = pi_new
         self.alpha_new = alpha_new
         self.estimated_mean = estimated_mean

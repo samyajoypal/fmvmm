@@ -204,3 +204,20 @@ def count_to_comp(df):
     trans_data=pd.DataFrame(multiplicative_replacement(data))
     
     return trans_data
+
+
+
+
+def dirichlet_covariance(alpha):
+    p = len(alpha)
+    alpha0 = np.sum(alpha)
+    cov = np.zeros((p, p))
+
+    for i in range(p):
+        for j in range(p):
+            if i == j:
+                cov[i, j] = (alpha[i] * (alpha0 - alpha[i])) / (alpha0**2 * (alpha0 + 1))
+            else:
+                cov[i, j] = -(alpha[i] * alpha[j]) / (alpha0**2 * (alpha0 + 1))
+
+    return cov

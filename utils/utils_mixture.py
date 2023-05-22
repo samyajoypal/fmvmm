@@ -1,6 +1,7 @@
 import numpy as np
 from sklearn.metrics import confusion_matrix
 import copy
+import matplotlib.pyplot as plt
 
 
 def acc_check(tru, obs):
@@ -88,3 +89,29 @@ def mixture_clusters(gamma_matrix, data_lol):
 
     return cluster, data_cwise
 
+def plot_correlation_heatmap(covariance_matrix, variable_names):
+    # Calculate correlation matrix from the covariance matrix
+    correlation_matrix = np.corrcoef(covariance_matrix)
+
+    # Create the heatmap plot
+    fig, ax = plt.subplots()
+    im = ax.imshow(correlation_matrix, cmap='RdYlBu', vmin=-1, vmax=1)
+
+    # Set x-axis and y-axis tick labels
+    ax.set_xticks(np.arange(len(variable_names)))
+    ax.set_yticks(np.arange(len(variable_names)))
+    ax.set_xticklabels(variable_names)
+    ax.set_yticklabels(variable_names)
+
+    # Rotate x-axis tick labels for better readability
+    plt.setp(ax.get_xticklabels(), rotation=45, ha='right', rotation_mode='anchor')
+
+    # Add colorbar
+    cbar = ax.figure.colorbar(im, ax=ax)
+    cbar.set_label('Correlation')
+
+    # Set plot title
+    ax.set_title('Correlation Heatmap')
+
+    # Show the plot
+    plt.show()
