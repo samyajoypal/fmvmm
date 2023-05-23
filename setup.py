@@ -1,12 +1,17 @@
 from setuptools import setup, find_packages
 
+project_url = {
+  'Link 1': 'https://github.com/samyajoypal/fmvmm'
+}
+
 setup(
     name='fmvmm',
-    version='1.0.11',
+    version='1.0.12',
     author='Samyajoy Pal',
     author_email='palsamyajoy@gmail.com',
     description="flexible multivariate mixture model",
     long_description="mixture model with different distributions",
+    project_urls = project_url,
     packages=find_packages(),
     install_requires=[
         'numpy',
