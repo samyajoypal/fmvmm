@@ -6,7 +6,7 @@ project_url = {
 
 setup(
     name='fmvmm',
-    version='1.0.12',
+    version='1.0.13',
     author='Samyajoy Pal',
     author_email='palsamyajoy@gmail.com',
     description="flexible multivariate mixture model",
