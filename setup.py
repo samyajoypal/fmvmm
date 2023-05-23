@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='fmvmm',
-    version='1.0.10',
+    version='1.0.11',
     author='Samyajoy Pal',
     author_email='palsamyajoy@gmail.com',
     description="flexible multivariate mixture model",
@@ -13,7 +13,8 @@ setup(
         'scipy',
         'pandas',
         'dirichlet',
-        'sklearn'
+        'sklearn',
+        'conorm'
     ],
     entry_points={
         'console_scripts': [
