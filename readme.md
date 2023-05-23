@@ -1,6 +1,6 @@
 # Clustering Compositional Data using Dirichlet Mixture Model
 
-This article shows some basic functions available in the python package. The python package is based on the paper https://doi.org/10.1371/journal.pone.0268438 
+This article shows some basic functions available in the python package. The python package is based on the paper https://doi.org/10.1371/journal.pone.0268438
 
 The package also includes a Soft EM version of Dirichlet Mixture Model which is aimed to be published soon.
 
@@ -59,7 +59,7 @@ It is also possible to use both Soft and Hard versions of DMM.
 ```python
 # First import the DMM class
 
-from mixtures.DMM_Class import DMM
+from fmvmm.mixtures.DMM_Class import DMM
 
 # Similarly we could import Soft DMM by using the command "from mixtures.DMM_Soft_Class import DMM_Soft"
 
@@ -105,7 +105,7 @@ If true labels of the data points are known, it is possible to get approximate m
 ```python
 #import necessary functions
 
-from utils.utils_mixture import acc_check, prec_check, rec_check, f_score
+from fmvmm.utils.utils_mixture import acc_check, prec_check, rec_check, f_score
 
 print("Accuracy of the model is", acc_check(s_shuffled['Initial_Clusters'], model.predict()))
 print("Precision of the model is", prec_check(s_shuffled['Initial_Clusters'], model.predict()))

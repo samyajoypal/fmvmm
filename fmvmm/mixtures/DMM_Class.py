@@ -88,8 +88,8 @@ class DMM:
         print("Hard DMM Fitting Done Successfully")
 
     def get_params(self):
-        print("The estimated pi values are ", self.pi_new)
-        print("The estimated alpha values are ", [l.tolist() for l in self.alpha_new])
+        # print("The estimated pi values are ", self.pi_new)
+        # print("The estimated alpha values are ", [l.tolist() for l in self.alpha_new])
 
         return self.pi_new, self.alpha_new
 
