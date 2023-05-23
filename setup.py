@@ -5,7 +5,7 @@ setup(
     version='1.0.3',
     author='Samyajoy Pal',
     author_email='palsamyajoy@gmail.com',
-    description="flexible multivariate mixture model"
+    description="flexible multivariate mixture model",
     long_description="mixture model with different distributions",
     packages=find_packages(),
     install_requires=[
