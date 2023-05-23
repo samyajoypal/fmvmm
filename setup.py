@@ -1,10 +1,11 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='mixture_models',
-    version='1.0.2',
+    name='fmvmm',
+    version='1.0.3',
     author='Samyajoy Pal',
     author_email='palsamyajoy@gmail.com',
+    description="flexible multivariate mixture model"
     long_description="mixture model with different distributions",
     packages=find_packages(),
     install_requires=[
@@ -18,7 +19,7 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'my_command = mixture_models.command:main',
+            'my_command = fmvmm.command:main',
         ],
     },
 )
