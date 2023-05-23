@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='fmvmm',
-    version='1.0.9',
+    version='1.0.10',
     author='Samyajoy Pal',
     author_email='palsamyajoy@gmail.com',
     description="flexible multivariate mixture model",
