@@ -2,11 +2,11 @@ import numpy as np
 import pandas as pd
 from scipy.stats import dirichlet
 import dirichlet as drm
-from utils.utils_dmm import (kmeans_init, gmm_init, kmeans_init_adv, gmm_init_adv, random_init,
+from fmvmm.utils.utils_dmm import (kmeans_init, gmm_init, kmeans_init_adv, gmm_init_adv, random_init,
                              dmm_loglikelihood, dmm_responsibilities, dmm_pi_estimate)
 
 
-from utils.utils_mixture import (mixture_clusters)
+from fmvmm.utils.utils_mixture import (mixture_clusters)
 
 
 def estimate_alphas(data_cwise, alpha_not, method):

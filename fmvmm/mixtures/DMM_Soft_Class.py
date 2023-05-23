@@ -11,10 +11,10 @@ from scipy.special import polygamma, psi
 from scipy.special import digamma
 import pandas as pd
 import copy
-from utils.utils_dmm import (kmeans_init, gmm_init, kmeans_init_adv, gmm_init_adv, random_init,
+from fmvmm.utils.utils_dmm import (kmeans_init, gmm_init, kmeans_init_adv, gmm_init_adv, random_init,
                              dmm_loglikelihood, dmm_responsibilities, dmm_pi_estimate)
 
-from utils.utils_mixture import (mixture_clusters)
+from fmvmm.utils.utils_mixture import (mixture_clusters)
 MAXINT = sys.maxsize
 euler = -1 * psi(1)  # Euler-Mascheroni constant
 
