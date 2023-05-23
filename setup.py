@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='fmvmm',
-    version='1.0.4',
+    version='1.0.5',
     author='Samyajoy Pal',
     author_email='palsamyajoy@gmail.com',
     description="flexible multivariate mixture model",
@@ -12,8 +12,6 @@ setup(
         'numpy',
         'scipy',
         'pandas',
-        'math',
-        'copy',
         'dirichlet',
         'sklearn'
     ],
