@@ -26,12 +26,13 @@ def estimate_alphas(data_cwise, alpha_not, method):
 
 class DMM:
 
-    def __init__(self, number_of_clusters, sample, method="meanprecision", initialization="KMeans", tol=0.0001):
+    def __init__(self, number_of_clusters, sample, method="meanprecision", initialization="KMeans", tol=0.0001,show_loglikelihood_diff=False):
         self.number_of_clusters = number_of_clusters
         self.sample = sample
         self.method = method
         self.initialization = initialization
         self.tol = tol
+        self.show_loglikelihood_diff=show_loglikelihood_diff
         self.k = self.number_of_clusters
         data = self.sample
         self.p = len(data.columns)
@@ -74,7 +75,8 @@ class DMM:
 
             self.alpha_temp = alpha_new
             self.pi_temp = pi_new
-            print(log_like_diff)
+            if self.show_loglikelihood_diff:
+                print(log_like_diff)
         self.pi_new = pi_new
         self.alpha_new = alpha_new
         self.estimated_mean = estimated_mean
@@ -83,7 +85,7 @@ class DMM:
         self.gamma_temp_ar = gamma_temp_ar
         self.gamma_matrix = gamma_matrix
         self.log_likelihood_new = log_likelihood_new
-        print("Model Fitting Done Successfully")
+        print("Hard DMM Fitting Done Successfully")
 
     def get_params(self):
         print("The estimated pi values are ", self.pi_new)
@@ -118,16 +120,16 @@ class DMM:
     def aic(self):
 
         return 2*((self.k-1)+(self.k*self.p)) - 2*(self.log_likelihood_new)
-    
+
     def icl(self):
         entropy_s=[]
         for i in self.gamma_matrix:
             for j in i:
                     ent_temp=j*np.log1p(j)
                     entropy_s.append(ent_temp)
-                     
-                     
-        
+
+
+
         entropy=np.sum(entropy_s)
-        
+
         return ((self.k-1)+(self.k*self.p))*np.log(self.n) - 2*(self.log_likelihood_new) - entropy

@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='mixture_models',
-    version='1.0',
+    version='1.0.1',
     author='Samyajoy Pal',
     author_email='palsamyajoy@gmail.com',
     long_description="mixture model with different distributions",
