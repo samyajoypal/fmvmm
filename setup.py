@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 project_url = {
-  'Link 1': 'https://github.com/samyajoypal/fmvmm'
+  'Github': 'https://github.com/samyajoypal/fmvmm'
 }
 
 setup(

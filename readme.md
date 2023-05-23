@@ -7,8 +7,7 @@ The package also includes a Soft EM version of Dirichlet Mixture Model which is 
 ## Installation:
 
 1. You must have python installed in your device.
-2. Download the repository
-3. To make sure you have all the necessary libraries required, please run the following command from root directory.    "pip install -r requirements.txt"
+2. Install the package using the command "pip install fmvmm"
 
 The follwing shows some examples using the python package.
 
