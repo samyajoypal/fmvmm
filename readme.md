@@ -72,7 +72,7 @@ model=DMM(number_of_clusters=4,sample= s_shuffled1, method="meanprecision", init
 model.fit() #To fit the model
 ```
 
-    Model Fitting Done Successfully
+    Hard DMM Fitting Done Successfully
 
 
 
@@ -94,8 +94,8 @@ print("AIC of the model is", model.aic())
 print("BIC of the model is", model.bic())
 ```
 
-    AIC of the model is 14.12176839212771
-    BIC of the model is 91.67356154387213
+    AIC of the model is -5579.8010189246825
+    BIC of the model is -5502.249225772938
 
 
 If true labels of the data points are known, it is possible to get approximate measures such as accuracy, precision, recall and $F_1$ score.
@@ -116,3 +116,13 @@ print("F_1 score of the model is", f_score(s_shuffled['Initial_Clusters'], model
     Precision of the model is 0.9512083333333333
     Recall of the model is 0.9286522071560359
     F_1 score of the model is 0.9397949466881848
+
+
+```python
+# To convert count RNA-seq data to compositional data, the following function can be used.
+from fmvmm.utils.utils_dmm import count_to_comp
+neocortex_mouse_url="https://raw.githubusercontent.com/samyajoypal/fmvmm/main/fmvmm/Data/neocortex_mouse.csv"
+#neocortex mouse data
+df1=pd.read_csv(neocortex_mouse_url)
+df1_trans=count_to_comp(df1)
+```
