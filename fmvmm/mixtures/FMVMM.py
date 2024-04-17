@@ -29,25 +29,25 @@ all_dist = ["mvsn", "mghp", "mgst", "mvhb", "mvn", "mnig", "mvt", "mvvg"]
 def organize_data_by_clusters(data, cluster_predictions):
     # Get the unique cluster labels
     unique_clusters = np.unique(cluster_predictions)
-    
+
     # Initialize a list to store data points for each cluster
     data_by_clusters = [np.empty((0, data.shape[1])) for _ in unique_clusters]
-    
+
     # Iterate over each data point and its cluster prediction
     for point, cluster in zip(data, cluster_predictions):
         # Append the data point to the corresponding cluster
         data_by_clusters[cluster] = np.vstack((data_by_clusters[cluster], point))
-    
+
     return data_by_clusters
 
 
 def flatten_params(params):
     """
     Flatten parameters into a single vector.
-    
+
     Parameters:
         params (tuple): The parameters.
-        
+
     Returns:
         flat_params (ndarray): The flattened parameters.
     """
@@ -56,11 +56,11 @@ def flatten_params(params):
 def reshape_params(flat_params, param_shapes):
     """
     Reshape a flattened parameter vector into original shapes.
-    
+
     Parameters:
         flat_params (ndarray): The flattened parameters.
         param_shapes (list): The shapes of the original parameters.
-        
+
     Returns:
         params (tuple): The reshaped parameters.
     """
@@ -75,13 +75,13 @@ def reshape_params(flat_params, param_shapes):
 def logpdf_wrapper(X,ind, flat_params, logpdf_func, param_shapes):
     """
     Wrapper function to compute the log-pdf for all data points using flattened parameters.
-    
+
     Parameters:
         X (ndarray): The data points. Shape (N, p).
         flat_params (ndarray): Flattened parameters.
         logpdf_func (callable): The log-pdf function.
         param_shapes (list): The shapes of the original parameters.
-        
+
     Returns:
         logpdf_values (ndarray): The log-pdf values for all data points.
     """
@@ -92,69 +92,69 @@ def score_vectors(logpdf_func, X, flat_params, param_shapes, epsilon=1e-6):
     """
     Compute the score vectors (gradient of log likelihood with respect to parameters)
     for each data point in X.
-    
+
     Parameters:
         logpdf_func (callable): The log probability density function.
         X (ndarray): The data points. Shape (N, p).
         flat_params (ndarray): The flattened parameters.
         param_shapes (list): The shapes of the original parameters.
         epsilon (float): Step size for finite differences.
-        
+
     Returns:
         scores (ndarray): The score vectors for each data point. Shape (N, num_params).
     """
     num_params = len(flat_params)
     N, p = X.shape
     scores = np.zeros((N, num_params))
-    
+
     # Compute score vector for each data point
     for i in range(N):
         # Compute gradient of logpdf for data point i
-        gradient = approx_fprime(flat_params, 
+        gradient = approx_fprime(flat_params,
                                   lambda flat_params: logpdf_wrapper(X,i, flat_params, logpdf_func, param_shapes),
                                   epsilon=epsilon)
         scores[i, :] = gradient
-        
+
     return scores
 
 def sum_outer_products(scores):
     """
     Compute the sum of the outer products of the score vectors.
-    
+
     Parameters:
         scores (ndarray): The score vectors for each data point. Shape (N, num_params).
-        
+
     Returns:
         sum_outer (ndarray): The sum of the outer products of the score vectors. Shape (num_params, num_params).
     """
     N, num_params = scores.shape
     sum_outer = np.zeros((num_params, num_params))
-    
+
     # Compute sum of outer products
     for i in range(N):
         sum_outer += np.outer(scores[i], scores[i])
-    
+
     return sum_outer
 
 def ensure_positive_diagonal(sum_outer):
     """
     Ensure that the matrix has positive diagonal elements.
-    
+
     Parameters:
         sum_outer (ndarray): The matrix. Shape (num_params, num_params).
-        
+
     Returns:
         sum_outer_pos (ndarray): The matrix with positive diagonal elements.
     """
     # Perform eigenvalue decomposition
     eigenvalues, eigenvectors = np.linalg.eig(sum_outer)
-    
+
     # Adjust eigenvalues to ensure positivity
     eigenvalues[eigenvalues < 0] = 1e-6  # Set negative eigenvalues to a small positive value
-    
+
     # Reconstruct the matrix
     sum_outer_pos = np.dot(eigenvectors, np.dot(np.diag(eigenvalues), np.linalg.inv(eigenvectors)))
-    
+
     return sum_outer_pos
 
 def compute_expected_info(logpdf_func, params_init, X, epsilon=1e-6):
@@ -164,9 +164,9 @@ def compute_expected_info(logpdf_func, params_init, X, epsilon=1e-6):
     # scores=score_vectors(logpdf_func, X, params_init, epsilon)
     # print(scores)
     sum_outer = sum_outer_products(scores)
-    
+
     return sum_outer
-    
+
 def ecdf_from_log_density(log_density):
     """
     Compute the empirical cumulative distribution function (ECDF) from log-density values.
@@ -208,11 +208,11 @@ def fmm_sorted_lpdf_cdf(pi_temp,alpha_temp,data_lol,list_of_dist):
             log_likelihood_old_temp = math.log1p(np.nansum(
                 [pi_temp[f]*dist_comb[f].pdf(np.reshape(np.array(data_lol[c]),(1,len(data_lol[c]))), *alpha_temp[f]) for f in range(k)]))
         log_likelihood_values_temp.append(log_likelihood_old_temp)
-    
+
     sorted_lists = sorted(zip(log_likelihood_values_temp, data_lol),reverse=False)
     sorted_lpdf, sorted_data = zip(*sorted_lists)
-    
-    
+
+
     cdfs=ecdf_from_log_density(log_likelihood_values_temp)
     return sorted_lpdf,cdfs
 
@@ -239,17 +239,17 @@ def remove_nan_tuples(list_of_lists, list_of_list_of_tuples):
         temp=flatten(list_of_list_of_tuples[i])
         if any(np.isnan(temp)) or any(np.isinf(temp)):
             indices_to_remove.append(i)
-            
+
     for i, inner_list in enumerate(list_of_lists):
         if any(val == 0 for val in inner_list):
             indices_to_remove.append(i)
-            
+
 
     # Remove sub-lists and tuples using the stored indices
     if len(indices_to_remove)>0:
         list_of_lists = [list_of_lists[i] for i in range(len(list_of_lists)) if i not in indices_to_remove]
         list_of_list_of_tuples = [list_of_list_of_tuples[i] for i in range(len(list_of_list_of_tuples)) if i not in indices_to_remove]
-        
+
     return list_of_lists, list_of_list_of_tuples, indices_to_remove
 
 def remove_elements_by_index(my_list, index_list):
@@ -260,50 +260,6 @@ def remove_elements_by_index(my_list, index_list):
 
 def get_dist_names(dist_comb):
     return [str(c.__name__) for c in dist_comb]
-
-
-# def stopping_criteria(log_likelihoods,tol,n_iter_max):
-#     if len(log_likelihoods)==n_iter_max:
-#         return True
-#     elif abs(log_likelihoods[-1]-log_likelihoods[-2])/abs(log_likelihoods[-2])<=tol:
-#         return True
-#     else:
-#         return False
- 
-
-# def log_pdf_dist_comb(X,alphas,dist_comb):
-#     N,p=X.shape
-#     k=len(alphas)
-#     probs=np.empty((N, k))
-#     for j in range(k):
-#         alpha=alphas[j]
-#         probs[:, j]=dist_comb[j].logpdf(X,*alpha)
-#     return probs
-
-
-
-# def _estimate_weighted_log_prob(
-#     X, alpha, pi,dist_comb):
-#     return log_pdf_dist_comb(X,alpha,dist_comb) + np.log(pi)
-
-
-# def _estimate_log_prob_resp(X, alpha, pi,dist_comb):
-#     weighted_log_prob = _estimate_weighted_log_prob(
-#         X,alpha, pi,dist_comb)
-#     log_prob_norm = logsumexp(weighted_log_prob, axis=1)
-#     with np.errstate(under="ignore"):
-#         # ignore underflow
-#         log_resp = weighted_log_prob - log_prob_norm[:, np.newaxis]
-#     return log_prob_norm, log_resp
-
-
-# def _e_step(X, alpha, pi,dist_comb):
-#     log_prob_norm, log_resp = _estimate_log_prob_resp(
-#         X, alpha, pi,dist_comb)
-#     return np.sum(log_prob_norm), log_resp
-           
-
-
 
 
 class fmvmm(BaseMixture):
@@ -322,7 +278,7 @@ class fmvmm(BaseMixture):
             self.dist_combs = list(
                 itertools.combinations_with_replacement(self.dist_variables, self.k))
         self.initialization=initialization
-    
+
     def _log_pdf_non_identical(self,X,alphas,dist_comb):
         N,p=X.shape
         k=len(alphas)
@@ -330,11 +286,11 @@ class fmvmm(BaseMixture):
         for j in range(k):
             alpha=alphas[j]
             probs[:, j]=dist_comb[j].logpdf(X,*alpha)
-        return probs    
-    
+        return probs
+
     def _estimate_weighted_log_prob_nonidentical(self, X, alpha, pi, dist_comb):
         return self._log_pdf_non_identical(X,alpha,dist_comb) + np.log(pi)
-    
+
     def fit(self,sample):
         self.data=sample
         self.n=len(sample)
@@ -351,9 +307,9 @@ class fmvmm(BaseMixture):
         self.worked_dist=[]
         for l in range(len(self.dist_combs)):
             try:
-                
+
                 if self.initialization=="kmeans":
-                    
+
                     self.pi_not, self.alpha_not = fmm_kmeans_init(
                         self.data, self.k, self.dist_combs[l])
                     self.alpha_temp = self.alpha_not
@@ -381,7 +337,7 @@ class fmvmm(BaseMixture):
                 traceback.print_exc()
                 #print("Error received while running,",self.dist_combs[l])
                 self.not_worked_dist.append(self.dist_combs[l])
-                pass    
+                pass
         self.list_pi,self.list_alpha,self.nan_ind=remove_nan_tuples(self.list_pi,self.list_alpha)
         self.list_aic=remove_elements_by_index(self.list_aic,self.nan_ind)
         self.list_bic=remove_elements_by_index(self.list_bic, self.nan_ind)
@@ -394,7 +350,7 @@ class fmvmm(BaseMixture):
         self.fitted=True
         if self.verbose:
             print("Model fitted successfully")
-    
+
     def get_params(self):
         return self.list_pi, self.list_alpha
 
@@ -443,17 +399,17 @@ class fmvmm(BaseMixture):
         print("Distribution Combinations That Could Not Be Fitted:")
         for i in range(len(self.not_worked_dist)):
             print(i, [str(self.not_worked_dist[i][j].__name__) for j in range(len(self.not_worked_dist[i]))])
-    
+
     def worked(self):
         print("Distribution Combinations That Could Be Fitted:")
         for i in range(len(self.worked_dist)):
             print(i, [str(self.worked_dist[i][j].__name__) for j in range(len(self.worked_dist[i]))])
-    
+
     def get_maximum_likelihood(self):
         return self.list_log_likelihood
     def get_all_likelihood(self):
         return self.list_all_log_likelihood
-    
+
     def get_standard_error(self):
         mixture_ses=[]
         for a,mix in enumerate(self.worked_dist):
@@ -477,12 +433,12 @@ class fmvmm(BaseMixture):
                 # diag_inv=np.diag(inv)
                 # print(diag_inv)
                 se=np.sqrt(diag_inv)
-                
+
                 mix_se.append(np.real(np.round(se,5)))
             mixture_ses.extend(mix_se)
-            
+
         return mixture_ses
-    
+
     def get_top_mixtures(self,n_top=10):
         wrk_lst=[]
         for i in range(len(self.worked_dist)):
@@ -494,169 +450,4 @@ class fmvmm(BaseMixture):
         # Sort the list of tuples based on bic values
         sorted_combined = sorted(combined)
 
-        return sorted_combined[:n_top]
-                
-                        
-                    
-                
-        
-        
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        
-
-
-# class fmvmm():
-#     def __init__(self, number_of_clusters, sample, tol=0.0001, list_of_dist=all_dist,specific_comb=False,print_log_likelihood=False,max_iter=25, initialization="kmeans",verbose=True):
-#         self.k = number_of_clusters
-#         self.sample = sample
-#         self.list_of_dist = list_of_dist
-#         self.data = sample
-#         self.p = len(sample.columns)
-#         self.n = len(sample)
-#         self.dist_variables = [dist_map[list_of_dist[j]]
-#                                for j in range(len(list_of_dist))]
-#         self.specific_comb=specific_comb
-#         if self.specific_comb==True:
-#             self.dist_combs = list(
-#                 itertools.combinations(self.dist_variables, self.k))
-#         else:
-#             self.dist_combs = list(
-#                 itertools.combinations_with_replacement(self.dist_variables, self.k))
-#         self.data_lol = self.data.values.tolist()
-#         self.tol=tol
-#         self.max_iter=max_iter
-#         self.initialization=initialization
-#         self.print_log_likelihood=print_log_likelihood
-#         self.verbose=verbose
-#         #print(self.dist_combs)
-
-#     def fit(self):
-#         self.list_aic = []
-#         self.list_bic = []
-#         self.list_pi = []
-#         self.list_alpha = []
-#         self.list_cluster = []
-#         self.list_log_likelihood = []
-#         self.list_all_log_likelihood = []
-#         self.list_gamma_matrix = []
-#         self.not_worked_dist=[]
-#         self.worked_dist=[]
-#         for l in range(len(self.dist_combs)):
-#             try:
-                
-#                 if self.initialization=="kmeans":
-                    
-#                     self.pi_not, self.alpha_not = fmm_kmeans_init(
-#                         self.data, self.k, self.dist_combs[l])
-#                     self.alpha_temp = self.alpha_not
-#                     self.pi_temp = self.pi_not
-#                 else:
-#                     self.pi_not, self.alpha_not = fmm_gmm_init(
-#                         self.data, self.k, self.dist_combs[l])
-#                     self.alpha_temp = self.alpha_not
-#                     self.pi_temp = self.pi_not
-                    
-#                 # print(self.pi_temp[0])
-#                 # print(self.alpha_temp[0])
-#                 # print(self.dist_combs[0][0])
-#                 # print(math.log(np.nansum(
-#                 #     [self.pi_temp[f]*self.dist_combs[0][f].pdf(np.reshape(np.array(self.data_lol[0]),(1,len(self.data_lol[0]))), *self.alpha_temp[f]) for f in range(self.k)])))
-                
-#                 stop=False
-#                 log_like_diff = 5
-#                 self.log_likelihoods=[]
-                
-#                 while stop!=True:
-#                 #while log_like_diff > self.tol:
-#                     # log_likelihood_old = fmm_loglikelihood(
-#                     #     self.pi_temp, self.alpha_temp, self.data_lol, self.dist_combs[l])
-#                     log_likelihood_old, log_gamma_temp = _e_step(
-#                         np.array(self.sample), self.alpha_temp, self.pi_temp,self.dist_combs[l])
-#                     if len(self.log_likelihoods)==0:
-#                         self.log_likelihoods.append(log_likelihood_old)
-#                     # gamma_temp_ar, gamma_matrix = fmm_responsibilities(
-#                     #     self.pi_temp, self.alpha_temp, self.data_lol, self.dist_combs[l])
-#                     gamma_temp_ar=np.exp(log_gamma_temp)
-#                     gamma_matrix = gamma_temp_ar.tolist()
-                   
-    
-#                     cluster, data_cwise = mixture_clusters(
-#                         gamma_matrix, self.data_lol)
-                    
-#                     pi_new = fmm_pi_estimate(gamma_temp_ar,data_cwise)
-    
-#                     alpha_new = fmm_estimate_alphas(
-#                         data_cwise, self.alpha_not, self.dist_combs[l])
-    
-#                     # log_likelihood_new = fmm_loglikelihood(
-#                     #     pi_new, alpha_new, self.data_lol, self.dist_combs[l])
-#                     log_likelihood_new, _ = _e_step(
-#                         np.array(self.sample), alpha_new, pi_new,self.dist_combs[l])
-#                     self.log_likelihoods.append(log_likelihood_new)
-#                     stop=stopping_criteria(self.log_likelihoods,self.tol,n_iter_max=self.max_iter)
-#                     log_like_diff = abs(log_likelihood_new-log_likelihood_old)/abs(log_likelihood_old)
-#                     self.alpha_temp = alpha_new
-#                     self.pi_temp = pi_new
-#                     if self.print_log_likelihood==True:
-#                         print("Loglikelihood:",log_likelihood_new, "Relative Difference:", log_like_diff )
-    
-#                 self.list_aic.append(
-#                     fmm_aic(self.k, alpha_new, log_likelihood_new))
-#                 self.list_bic.append(
-#                     fmm_bic(self.k, alpha_new, log_likelihood_new, self.n))
-#                 self.list_pi.append(pi_new)
-#                 self.list_alpha.append(alpha_new)
-#                 self.list_cluster.append(cluster)
-#                 self.list_log_likelihood.append(log_likelihood_new)
-#                 self.list_gamma_matrix.append(gamma_matrix)
-#                 self.worked_dist.append(self.dist_combs[l])
-#                 self.list_all_log_likelihood.append(self.log_likelihoods)
-#                 if self.verbose:
-#                     print("distribution fitted", get_dist_names(self.dist_combs[l]))
-#             except:
-#                 traceback.print_exc()
-#                 #print("Error received while running,",self.dist_combs[l])
-#                 self.not_worked_dist.append(self.dist_combs[l])
-#                 pass    
-#         self.list_pi,self.list_alpha,self.nan_ind=remove_nan_tuples(self.list_pi,self.list_alpha)
-#         self.list_aic=remove_elements_by_index(self.list_aic,self.nan_ind)
-#         self.list_bic=remove_elements_by_index(self.list_bic, self.nan_ind)
-#         self.list_cluster=remove_elements_by_index(self.list_cluster, self.nan_ind)
-#         self.list_log_likelihood=remove_elements_by_index(self.list_log_likelihood, self.nan_ind)
-#         self.list_gamma_matrix=remove_elements_by_index(self.list_gamma_matrix, self.nan_ind)
-#         self.not_worked_dist.extend(w for w in [self.worked_dist[h] for h in self.nan_ind])
-#         self.worked_dist=remove_elements_by_index(self.worked_dist, self.nan_ind)
-#         self.list_all_log_likelihood=remove_elements_by_index(self.list_all_log_likelihood, self.nan_ind)
-#         if self.verbose:
-#             print("Model fitted successfully")
-
-    
-            
-            
-            
-            
-            
+        return sorted_combined[:n_top]        
