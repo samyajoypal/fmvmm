@@ -3,6 +3,11 @@ import pandas as pd
 import itertools
 import math
 from sklearn.cluster import KMeans
+from sklearn import mixture
+
+    
+    
+
 
 def fmm_loglikelihood(pi_temp,alpha_temp,data_lol,dist_comb):
     n = len(data_lol)
@@ -41,16 +46,17 @@ def fmm_responsibilities(pi_temp, alpha_temp, data_lol,dist_comb):
     return gamma_temp_ar, gamma_matrix
 
 
-def fmm_pi_estimate(gamma_temp_ar):
+def fmm_pi_estimate(gamma_temp_ar,data_cwise):
     n = gamma_temp_ar.shape[0]
     k = gamma_temp_ar.shape[1]
     pi_new = []
-    nk = []
-    for g in range(k):
-        nk_temp = np.nansum([gamma_temp_ar[w, g] for w in range(n)])
-        pi_temp = nk_temp/n
-        pi_new.append(pi_temp)
-        nk.append(nk_temp)
+    # nk = []
+    # for g in range(k):
+    #     nk_temp = np.nansum([gamma_temp_ar[w, g] for w in range(n)])
+    #     pi_temp = nk_temp/n
+    #     pi_new.append(pi_temp)
+    #     nk.append(nk_temp)
+    pi_new = [len(data_cwise[m])/n for m in range(k)]
     return pi_new
 
 
@@ -66,14 +72,27 @@ def fmm_kmeans_init(data, k,dist_comb):
     alpha_not=[dist_comb[j].fit(np.array(data_cwise[j])) for j in range(k)]
     return pi_not, alpha_not
 
+def fmm_gmm_init(data, k,dist_comb):
+    n = len(data)
+    clf = mixture.GaussianMixture(n_components=k, covariance_type='full')
+    clf.fit(data)
+    data_lol = data.values.tolist()
+    data_cwise = [[] for i in range(k)]
+    for i in range(n):
+        data_cwise[clf.predict(data)[i]].append(data_lol[i])
+    pi_not = [len(data_cwise[m])/n for m in range(k)]
+    alpha_not=[dist_comb[j].fit(np.array(data_cwise[j])) for j in range(k)]
+    return pi_not, alpha_not
 
-def fmm_estimate_alphas(data_cwise, alpha_not, dist_comb):
+
+
+def fmm_estimate_alphas(data_cwise, alpha_not, dist_comb_not):
     alpha_new = []
     for t in range(len(data_cwise)):
         if np.array(data_cwise[t]).ndim == 1:
             alpha_new_temp = alpha_not[t]
         else:
-            alpha_new_temp = dist_comb[t].fit(np.array(np.array(data_cwise[t])))
+            alpha_new_temp = dist_comb_not[t].fit(np.array(np.array(data_cwise[t])))
 
         alpha_new.append(alpha_new_temp)
     return alpha_new

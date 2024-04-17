@@ -77,17 +77,26 @@ def f_score(tru, obs):
     return f_sc
 
 
-def mixture_clusters(gamma_matrix, data_lol):
-    n = len(data_lol)
-    k = len(gamma_matrix[0])
-    cluster = []
-    data_cwise = [[] for i in range(k)]
-    for h in range(n):
-        max_prob_c = gamma_matrix[h].index(max(gamma_matrix[h]))
-        data_cwise[max_prob_c].append(data_lol[h])
-        cluster.append(max_prob_c)
+# def mixture_clusters(gamma_matrix, data_lol):
+#     n = len(data_lol)
+#     k = len(gamma_matrix[0])
+#     cluster = []
+#     data_cwise = [[] for i in range(k)]
+#     for h in range(n):
+#         max_prob_c = gamma_matrix[h].index(max(gamma_matrix[h]))
+#         data_cwise[max_prob_c].append(data_lol[h])
+#         cluster.append(max_prob_c)
 
-    return cluster, data_cwise
+#     return cluster, data_cwise
+
+def mixture_clusters(gamma_matrix, data_lol):
+    max_prob_c = np.argmax(gamma_matrix, axis=1)  # Get index of maximum probability for each row
+    data_cwise = [[] for _ in range(gamma_matrix.shape[1])]  # Initialize list of lists
+
+    for i, c in enumerate(max_prob_c):
+        data_cwise[c].append(data_lol[i])
+
+    return max_prob_c, data_cwise
 
 def plot_correlation_heatmap(covariance_matrix, variable_names):
     # Calculate correlation matrix from the covariance matrix
@@ -115,3 +124,34 @@ def plot_correlation_heatmap(covariance_matrix, variable_names):
 
     # Show the plot
     plt.show()
+    
+    
+def create_cluster_dataframes(dataframe, cluster_labels):
+    """
+    Create different dataframes for each cluster based on the provided labels.
+
+    Parameters:
+    - dataframe: pd.DataFrame, the original dataframe containing numerical data
+    - cluster_labels: list, true cluster labels for each data point
+
+    Returns:
+    - cluster_dataframes: list, a list containing dataframes for each cluster
+    """
+
+    # Check if the length of cluster_labels matches the number of rows in the dataframe
+    if len(cluster_labels) != len(dataframe):
+        raise ValueError("Length of cluster_labels should match the number of rows in the dataframe.")
+
+    # Create an empty list to store dataframes for each cluster
+    cluster_dataframes = []
+
+    # Iterate through unique cluster labels
+    unique_clusters = set(cluster_labels)
+    for cluster in unique_clusters:
+        # Filter rows belonging to the current cluster
+        cluster_data = dataframe[cluster_labels == cluster]
+
+        # Store the dataframe in the dictionary with the cluster label as the key
+        cluster_dataframes.append(cluster_data)
+
+    return cluster_dataframes
