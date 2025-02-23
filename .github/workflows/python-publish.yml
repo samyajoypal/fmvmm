@@ -31,6 +31,10 @@ jobs:
         pip install build
     - name: Build package
       run: python -m build
+    - name: Debug package files
+      run: |
+        ls -lah dist/
+        twine check dist/*
     - name: Publish distribution 📦 to Test PyPI
       if: startsWith(github.ref, 'refs/tags')
       uses: pypa/gh-action-pypi-publish@release/v1
