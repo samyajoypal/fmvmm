@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 # Read long description from README.md if available
-with open("README.md", "r", encoding="utf-8") as fh:
+with open("readme.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 project_url = {
@@ -27,7 +27,7 @@ setup(
         "pandas>=2.0, <2.2",
         "scikit-learn>=1.6, <1.8",
         "scipy>=1.9, <1.11",
-        "setuptools",  
+        "setuptools",
     ],
     classifiers=[
         "Programming Language :: Python :: 3",
