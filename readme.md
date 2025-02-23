@@ -33,6 +33,7 @@ FMVMM is a Python package providing a comprehensive collection of finite mixture
 - Multivariate Skew Slash
 - Multivariate Slash
 - Multivariate Skew Normal Contaminated
+- Multivariate Skew Laplace
 
 ## Installation
 You can install FMVMM using:

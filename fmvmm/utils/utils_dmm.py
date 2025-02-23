@@ -6,7 +6,6 @@ import math
 import pandas as pd
 import conorm
 from scipy.special import gammaln, psi,digamma
-import dirichlet as drm
 import scipy.special as sp
 
 
