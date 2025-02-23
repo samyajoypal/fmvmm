@@ -31,16 +31,12 @@ jobs:
         pip install build
     - name: Build package
       run: python -m build
-    - name: Debug package files
-      run: |
-        ls -lah dist/
-        twine check dist/*
     - name: Publish distribution 📦 to Test PyPI
       if: startsWith(github.ref, 'refs/tags')
-      uses: pypa/gh-action-pypi-publish@release/v1
+      uses: pypa/gh-action-pypi-publish@release/v1 --verbose
       with:
         password: ${{ secrets.TEST_PYPI_API_TOKEN }}
-        repository-url: https://test.pypi.org/legacy/
+        repository-url: https://test.pypi.org/legacy/ --verbose
     - name: Publish distribution 📦 to PyPI
       if: startsWith(github.ref, 'refs/tags')
       uses: pypa/gh-action-pypi-publish@release/v1
