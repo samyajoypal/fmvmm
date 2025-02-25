@@ -38,22 +38,22 @@ def sample_mixture_distribution(N, rand_func, pis, alphas, mixture_type = "ident
         assert K==len(rand_func)
     # Compute number of samples for each component (except last)
     sample_counts = [int(np.floor(N * pi)) for pi in pis[:-1]]
-    
+
     # Ensure total adds up to N (assign remaining to last component)
     sample_counts.append(N - sum(sample_counts))
-    
+
     # Generate samples from each component and store labels
     samples = []
     labels = []
     for k in range(K):
         M_k = sample_counts[k]  # Number of samples for this component
         if M_k > 0:
-            if mixture_type == "identical":
+            if mixture_type != "identical":
                 samples.append(rand_func(*alphas[k], *[M_k]))  # Call the generator with params
             else:
                 samples.append(rand_func[k](*alphas[k], *[M_k]))
             labels.extend([k] * M_k)  # Assign component label k to these samples
-    
+
     # Concatenate samples and labels
     X = np.vstack(samples)
     labels = np.array(labels)
@@ -80,10 +80,10 @@ def map_labels(true_labels, predicted_labels):
     - mapped_predicted_labels: np.ndarray, mapped predicted labels.
     """
     true_labels, predicted_labels = np.array(true_labels), np.array(predicted_labels)
-    
+
     unique_true_labels = np.unique(true_labels)
     unique_pred_labels = np.unique(predicted_labels)
-    
+
     cost_matrix = np.zeros((len(unique_true_labels), len(unique_pred_labels)))
 
     for i, true_label in enumerate(unique_true_labels):
@@ -166,8 +166,8 @@ def plot_correlation_heatmap(covariance_matrix, variable_names):
 
     # Show the plot
     plt.show()
-    
-    
+
+
 def create_cluster_dataframes(dataframe, cluster_labels):
     """
     Create different dataframes for each cluster based on the provided labels.
