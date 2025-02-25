@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
 from scipy.optimize import linear_sum_assignment
 
-def sample_mixture_distribution(N, rand_func, pis, alphas, mixture_type = "identical", random_state=None):
+def sample_mixture_distribution(N, rand_func, pis, alphas, mixture_type="identical", random_state=None):
     """
     Generate N samples from a mixture of a given probability distribution,
     along with the corresponding component labels.
@@ -14,14 +14,17 @@ def sample_mixture_distribution(N, rand_func, pis, alphas, mixture_type = "ident
     ----------
     N : int
         Total number of samples.
-    rand_func : callable (identical case) or list of callable (non-identical case)
-        A function that generates random samples from a given distribution.
-        It should take parameters in 'alphas[k]' and return a (M, p) array.
+    rand_func : callable (identical case) or list of callables (non-identical case)
+        If mixture_type == "identical", a single function that generates random samples.
+        If mixture_type != "identical", a list of functions, one per component.
     pis : list or array, shape (K,)
         Mixture proportions (must sum to 1).
     alphas : list of length K
         List of parameter sets for each component, where each alphas[k]
         is a dictionary or list of parameters to be passed to `rand_func`.
+    mixture_type : str, optional
+        "identical" if all components use the same `rand_func`,
+        otherwise "non-identical" (each component has a separate function).
     random_state : int or None, optional
         Random seed for reproducibility.
 
@@ -34,13 +37,15 @@ def sample_mixture_distribution(N, rand_func, pis, alphas, mixture_type = "ident
     """
     rng = np.random.default_rng(random_state)
     K = len(pis)
+
+    # Fix the assertion:
     if mixture_type != "identical":
-        assert K==len(rand_func)
+        assert isinstance(rand_func, list) and K == len(rand_func), \
+            "For non-identical mixtures, rand_func must be a list of length K."
+
     # Compute number of samples for each component (except last)
     sample_counts = [int(np.floor(N * pi)) for pi in pis[:-1]]
-
-    # Ensure total adds up to N (assign remaining to last component)
-    sample_counts.append(N - sum(sample_counts))
+    sample_counts.append(N - sum(sample_counts))  # Ensure total samples sum to N
 
     # Generate samples from each component and store labels
     samples = []
@@ -48,17 +53,17 @@ def sample_mixture_distribution(N, rand_func, pis, alphas, mixture_type = "ident
     for k in range(K):
         M_k = sample_counts[k]  # Number of samples for this component
         if M_k > 0:
-            if mixture_type != "identical":
-                samples.append(rand_func(*alphas[k], *[M_k]))  # Call the generator with params
+            if mixture_type == "identical":
+                samples.append(rand_func(*alphas[k], M_k))  # Call the single generator
             else:
-                samples.append(rand_func[k](*alphas[k], *[M_k]))
+                samples.append(rand_func[k](*alphas[k], M_k))  # Call the specific function for k
             labels.extend([k] * M_k)  # Assign component label k to these samples
 
     # Concatenate samples and labels
     X = np.vstack(samples)
     labels = np.array(labels)
 
-    # Shuffle samples and labels together to avoid ordering artifacts
+    # Shuffle samples and labels together
     indices = np.arange(N)
     rng.shuffle(indices)
     X = X[indices]

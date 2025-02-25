@@ -10,7 +10,7 @@ project_url = {
 
 setup(
     name="fmvmm",
-    version="2.0.4",
+    version="2.0.5",
     author="Samyajoy Pal",
     author_email="palsamyajoy@gmail.com",
     description="Flexible Multivariate Mixture Model",
