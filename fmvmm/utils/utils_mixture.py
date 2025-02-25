@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
 from scipy.optimize import linear_sum_assignment
 
-def sample_mixture_distribution(N, rand_func, pis, alphas, random_state=None):
+def sample_mixture_distribution(N, rand_func, pis, alphas, mixture_type = "identical", random_state=None):
     """
     Generate N samples from a mixture of a given probability distribution,
     along with the corresponding component labels.
@@ -14,7 +14,7 @@ def sample_mixture_distribution(N, rand_func, pis, alphas, random_state=None):
     ----------
     N : int
         Total number of samples.
-    rand_func : callable
+    rand_func : callable (identical case) or list of callable (non-identical case)
         A function that generates random samples from a given distribution.
         It should take parameters in 'alphas[k]' and return a (M, p) array.
     pis : list or array, shape (K,)
@@ -34,7 +34,8 @@ def sample_mixture_distribution(N, rand_func, pis, alphas, random_state=None):
     """
     rng = np.random.default_rng(random_state)
     K = len(pis)
-    
+    if mixture_type == "identical":
+        assert K==len(rand_func)
     # Compute number of samples for each component (except last)
     sample_counts = [int(np.floor(N * pi)) for pi in pis[:-1]]
     
@@ -47,7 +48,10 @@ def sample_mixture_distribution(N, rand_func, pis, alphas, random_state=None):
     for k in range(K):
         M_k = sample_counts[k]  # Number of samples for this component
         if M_k > 0:
-            samples.append(rand_func(*alphas[k], *[M_k]))  # Call the generator with params
+            if mixture_type == "identical":
+                samples.append(rand_func(*alphas[k], *[M_k]))  # Call the generator with params
+            else:
+                samples.append(rand_func[k](*alphas[k], *[M_k]))
             labels.extend([k] * M_k)  # Assign component label k to these samples
     
     # Concatenate samples and labels
