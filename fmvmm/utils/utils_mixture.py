@@ -34,7 +34,7 @@ def sample_mixture_distribution(N, rand_func, pis, alphas, mixture_type = "ident
     """
     rng = np.random.default_rng(random_state)
     K = len(pis)
-    if mixture_type == "identical":
+    if mixture_type != "identical":
         assert K==len(rand_func)
     # Compute number of samples for each component (except last)
     sample_counts = [int(np.floor(N * pi)) for pi in pis[:-1]]
