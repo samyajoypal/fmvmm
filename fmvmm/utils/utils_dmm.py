@@ -44,10 +44,10 @@ def mixture_proportions_info(pi, N_j):
     # pi, N_j should each be shape (k,)
     I_diag = N_j / (pi**2)
     I_pi = np.diag(I_diag)
-    
+
     I_inv_diag = (pi**2) / N_j
     I_pi_inv = np.diag(I_inv_diag)
-    
+
     return I_pi, I_pi_inv
 
 def single_dirichlet_info(alpha_j, n_j, ridge_factor=1e-10, use_pinv=False):
@@ -69,18 +69,18 @@ def single_dirichlet_info(alpha_j, n_j, ridge_factor=1e-10, use_pinv=False):
     """
     d = len(alpha_j)
     alpha_sum = np.sum(alpha_j)
-    
+
     # D = diag(n_j * trigamma(alpha_j))
     D_vals = n_j * sp.polygamma(1, alpha_j)  # shape (d,)
     D = np.diag(D_vals)
-    
+
     # G = - n_j * trigamma(sum_j alpha_j)
     psi_sum = sp.polygamma(1, alpha_sum)
     G = - n_j * psi_sum
-    
+
     # => I_alpha (d x d)
     I_alpha = D + G * np.ones((d, d))
-    
+
     # # Inverse
     # D_star = np.diag(1.0 / D_vals)  # shape (d x d)
     # a_star_vals = 1.0 / sp.polygamma(1, alpha_j)  # shape (d,)
@@ -89,10 +89,10 @@ def single_dirichlet_info(alpha_j, n_j, ridge_factor=1e-10, use_pinv=False):
     # denom = 1.0 - psi_sum * np.sum(a_star_vals)
     # if abs(denom) < 1e-15:
     #     raise ValueError("Denominator for beta is near zero; check alpha_j range or n_j.")
-    
+
     # beta = (n_j * psi_sum) / denom
     # I_alpha_inv = D_star + beta * (a_star @ a_star.T)
-    
+
     # I_alpha_inv = np.linalg.inv(I_alpha)
     M = I_alpha.shape[0]
     # First attempt direct inverse
@@ -112,7 +112,7 @@ def single_dirichlet_info(alpha_j, n_j, ridge_factor=1e-10, use_pinv=False):
             except np.linalg.LinAlgError:
                 # As a last fallback, use pseudoinverse of the ridge version
                 I_alpha_inv = np.linalg.pinv(ridge_mat)
-    
+
     return I_alpha, I_alpha_inv
 
 def combined_info_and_se(pi, alpha, gamma, mode='soft'):
@@ -162,7 +162,7 @@ def combined_info_and_se(pi, alpha, gamma, mode='soft'):
     big_dim = k + k*d
     I_total = np.zeros((big_dim, big_dim))
     I_total_inv = np.zeros((big_dim, big_dim))
-    
+
     # (a) place the (k x k) mixture block at top-left
     I_total[0:k, 0:k] = I_pi
     I_total_inv[0:k, 0:k] = I_pi_inv
@@ -226,9 +226,9 @@ def dmm_kl_divergence(pi, omega, f_models, g_models):
 
         for b in range(len(omega)):
             term_denom += omega[b] * np.exp(-dirichlet_kl_divergence(f_models[a], g_models[b]))
-        
+
         if term_denom==0:
-            term_denom=term_denom+1e-243  
+            term_denom=term_denom+1e-243
         if term_num==0:
             term_num=term_num+1e-243
         kl_divergence += pi[a] * np.log(term_num / term_denom)
@@ -257,7 +257,7 @@ def dmm_mc_kl_divergence(pi, omega, f_models, g_models, n_samples=1000):
     xis=[]
     for j in range(k):
         xis.extend(np.random.dirichlet(f_models[j],nis[j]))
-    
+
     logs = []
 
     for xi in xis:
@@ -271,7 +271,7 @@ def dmm_mc_kl_divergence(pi, omega, f_models, g_models, n_samples=1000):
             f_pdf = np.nansum(np.array(f_pdf_,dtype=np.float128))
             g_pdf_=[omega[j] * dirichlet.pdf(xi, g_models[j]) for j in range(len(omega))]
             g_pdf = np.nansum(np.array(g_pdf_,dtype=np.float128))
-    
+
             # Calculate log(f(x_i)/g(x_i)) and append to logs
             logs.append(np.log(f_pdf / g_pdf))
 
@@ -486,7 +486,7 @@ def gmm_init(data, k):
 
 def random_init(data, k, random_seed=0):
     np.random.seed(random_seed)
-    p = len(data.columns)
+    p = data.shape[1]
     alpha_not = []
     for h in range(k):
         alpha_not_temp = np.random.uniform(0, 50, p)
@@ -596,7 +596,7 @@ def count_to_comp(df):
     for j in range(df_array.shape[1]):
         lj_temp=nf[j]*np.sum(df_array[:, j])
         lj.append(lj_temp)
-        
+
 
     sj=[]
     for j in range(df_array.shape[1]):
@@ -611,15 +611,15 @@ def count_to_comp(df):
             xi.append(xi_temp)
         xi_sum=np.sum(xi)
         xi_trans=[xi[k]/xi_sum for k in range(df_array.shape[1])]
-       
-            
+
+
         x_lol.append(xi_trans)
         #x_lol.append(xi)
-        
+
     data=pd.DataFrame(x_lol)
     # trans_data=pd.DataFrame(multiplicative_replacement(data))
     trans_data=pd.DataFrame(data)
-    
+
     return trans_data
 
 
