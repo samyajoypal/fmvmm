@@ -212,7 +212,7 @@ def combined_info_and_se(pi, alpha, gamma, x,method ='score', mode='soft'):
         I_obs: observed info matrix
         se_obs: sqrt of diagonal of inv(I_obs)
     """
-    if method =="score":
+    if method =="louis":
         N_j, N = mixture_counts(gamma, mode=mode)
         k = len(pi)
         d = alpha.shape[1]
@@ -257,7 +257,7 @@ def combined_info_and_se(pi, alpha, gamma, x,method ='score', mode='soft'):
         se_obs = np.sqrt(var_diag)
 
         return I_obs, se_obs
-    elif method == "louis":
+    elif method == "score":
         IM = empirical_info_matrix(pi, alpha, gamma, x, mode)
         try:
             IM_inv = np.linalg.inv(IM)
