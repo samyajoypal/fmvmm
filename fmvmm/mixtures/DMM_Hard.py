@@ -12,7 +12,7 @@ from fmvmm.utils.utils_mixture import (mixture_clusters)
 import time
 from scipy.special import gammaln,logsumexp
 from scipy.special import polygamma, psi, digamma
-import sys 
+import sys
 from fmvmm.mixtures._base import BaseMixture
 from fmvmm.utils.utils_dmm import combined_info_and_se
 
@@ -47,7 +47,7 @@ class DMM_Hard(BaseMixture):
         self.initialization=initialization
         self.method = method
         self.family = "dirichlet"
-        
+
     def _log_pdf_dirichlet(self,X,alphas):
         threshold = 1e-10
         N,p=X.shape
@@ -63,11 +63,11 @@ class DMM_Hard(BaseMixture):
                     t2=np.sum(gammaln(alpha))
                     t3=gammaln(np.sum(alpha))
                     probs[i,j]=np.sum(t1)-t2+t3
-        return probs    
-    
+        return probs
+
     def _estimate_weighted_log_prob_identical(self, X, alpha, pi):
         return self._log_pdf_dirichlet(X,alpha) + np.log(pi)
-    
+
     def fit(self,sample):
         start_time = time.time()
         self.data = self._process_data(sample)
@@ -104,8 +104,8 @@ class DMM_Hard(BaseMixture):
             print("Hard DMM Fitting Done Successfully")
         end_time = time.time()
         self.execution_time=end_time-start_time
-    
-    
+
+
     def get_params(self):
         #print("The estimated pi values are ", self.pi_new)
         #print("The estimated alpha values are ", self.alpha_new)
@@ -128,7 +128,7 @@ class DMM_Hard(BaseMixture):
 
     def get_precision(self):
         preci=[np.sum(al) for al in self.alpha_new]
-        
+
         return preci
 
     def responsibilities(self):
@@ -137,10 +137,10 @@ class DMM_Hard(BaseMixture):
 
     def n_iter(self):
         return len(self.log_likelihoods)
-    
-    def get_info_mat(self):
-        IM, SE = combined_info_and_se(self.pi_new, np.array(self.alpha_new), self.gamma_temp_ar, mode = "hard")
-        
+
+    def get_info_mat(self, method = "score"):
+        IM, SE = combined_info_and_se(self.pi_new, np.array(self.alpha_new), self.gamma_temp_ar, self.data,method, mode = "hard")
+
         return IM, SE
 
     # def clustered_data(self):
@@ -166,5 +166,3 @@ class DMM_Hard(BaseMixture):
     #     entropy=np.sum(entropy_s)
 
     #     return ((self.k-1)+(self.k*self.p))*np.log(self.n) - 2*(self.log_likelihood_new) - entropy
-
-    

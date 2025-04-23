@@ -9,6 +9,96 @@ from scipy.special import gammaln, psi,digamma
 import scipy.special as sp
 
 
+def score_vector_observation(pi, alpha, x_i, gamma_i):
+    """
+    Computes the score vector for a single observation x_i, given:
+        - pi: shape (k,)
+        - alpha: shape (k, d)
+        - x_i: shape (d,)
+        - gamma_i: shape (k,)
+    Returns:
+        - score_i: shape (k + k*d,)
+    """
+    k, d = alpha.shape
+    score_pi = gamma_i / pi  # shape (k,)
+    score_alpha = []
+
+    for j in range(k):
+        alpha_j = alpha[j]
+        alpha_sum = np.sum(alpha_j)
+        grad = sp.psi(alpha_sum) - sp.psi(alpha_j) + np.log(x_i)  # shape (d,)
+        score_alpha_j = gamma_i[j] * grad
+        score_alpha.append(score_alpha_j)
+
+    score_alpha = np.concatenate(score_alpha)  # shape (k*d,)
+    return np.concatenate([score_pi, score_alpha])  # shape (k + k*d,)
+
+def empirical_info_matrix(pi, alpha, gamma, x, mode='soft'):
+    """
+    Computes the empirical observed information matrix using the score vector method.
+    mode: 'soft' or 'hard'
+    Returns:
+        - I_emp: empirical observed info matrix (k + k*d, k + k*d)
+    """
+    if mode == 'hard':
+        gamma = hard_assignments(gamma)
+
+    N, d = x.shape
+    k = len(pi)
+    big_dim = k + k * d
+    I_emp = np.zeros((big_dim, big_dim))
+
+    for i in range(N):
+        score_i = score_vector_observation(pi, alpha, x[i], gamma[i])
+        I_emp += np.outer(score_i, score_i)
+
+    return I_emp
+
+def missing_info_pi(pi, gamma):
+    """
+    Computes the missing information matrix (covariance of score) for π.
+
+    Parameters:
+    - pi: shape (K,)
+    - gamma: shape (n, K)
+
+    Returns:
+    - I_missing: shape (K, K)
+    """
+    n, K = gamma.shape
+    I_missing = np.zeros((K, K))
+
+    for k in range(K):
+        for j in range(K):
+            if k == j:
+                I_missing[k, k] = np.sum(gamma[:, k] * (1 - gamma[:, k])) / pi[k]**2
+            else:
+                I_missing[k, j] = -np.sum(gamma[:, k] * gamma[:, j]) / (pi[k] * pi[j])
+
+    return I_missing
+
+def missing_info_alpha(alpha_j, gamma_j, x):
+    """
+    Compute the missing information matrix for one Dirichlet component's alpha_j.
+    gamma_j: (N,) vector of posterior probs for component j
+    x: (N, d) data matrix
+    """
+    N, d = x.shape
+    alpha_sum = np.sum(alpha_j)
+    psi_sum = sp.psi(alpha_sum)
+    psi_j = sp.psi(alpha_j)
+
+    A = psi_sum - psi_j + np.log(x)  # shape (N, d)
+
+    # Compute missing info matrix: sum_i gamma_{ij} (1 - gamma_{ij}) A_i A_i^T
+    weights = gamma_j * (1 - gamma_j)  # shape (N,)
+    I_miss = np.zeros((d, d))
+    for i in range(N):
+        outer = np.outer(A[i], A[i])
+        I_miss += weights[i] * outer
+    return I_miss
+
+
 def hard_assignments(gamma):
     """
     Convert soft responsibilities (rows sum to 1) into hard 0/1 assignments
@@ -115,71 +205,69 @@ def single_dirichlet_info(alpha_j, n_j, ridge_factor=1e-10, use_pinv=False):
 
     return I_alpha, I_alpha_inv
 
-def combined_info_and_se(pi, alpha, gamma, mode='soft'):
+def combined_info_and_se(pi, alpha, gamma, x,method ='score', mode='soft'):
     """
-    Build and return a *combined* Fisher Info matrix for:
-        - Mixture proportions pi (length k)
-        - Dirichlet parameters alpha (shape (k, d)), i.e. alpha_j is the d-dim vector for cluster j
-
-    We do this by forming a block-diagonal matrix of size [k + k*d,  k + k*d]:
-      - Top-left (k x k): mixture_proportions_info
-      - Then k blocks along the diagonal (d x d each) for each cluster's alpha_j
-    Cross terms are assumed zero in a standard Dirichlet mixture model.
-
+    Computes observed Fisher Information and SEs by subtracting missing info from complete info.
     Returns:
-       I_total, I_total_inv, se_total
-
-    where se_total is an array of length [k + k*d] giving the sqrt of the diagonal
-    of I_total_inv. The ordering is:
-        [ pi_1, ..., pi_k, alpha_1(1),...,alpha_1(d), alpha_2(1),..., alpha_k(d) ].
+        I_obs: observed info matrix
+        se_obs: sqrt of diagonal of inv(I_obs)
     """
-    # 1) First, gather mixture counts
-    N_j, N = mixture_counts(gamma, mode=mode)
-    k = len(pi)         # number of mixture components
-    # alpha should be shape (k, d)
-    if alpha.ndim != 2 or alpha.shape[0] != k:
-        raise ValueError("alpha must be shape (k, d). You gave shape %s" % (alpha.shape,))
+    if method =="score":
+        N_j, N = mixture_counts(gamma, mode=mode)
+        k = len(pi)
+        d = alpha.shape[1]
+        big_dim = k + k * d
 
-    d = alpha.shape[1]  # dimension of each Dirichlet
-    # We'll produce a block-diagonal of dimension k + k*d
+        # Complete info
+        I_pi, I_pi_inv = mixture_proportions_info(pi, N_j)
+        I_blocks = []
+        I_inv_blocks = []
+        for j in range(k):
+            I_j, I_j_inv = single_dirichlet_info(alpha[j], N_j[j])
+            I_blocks.append(I_j)
+            I_inv_blocks.append(I_j_inv)
 
-    # 2) Mixture block
-    I_pi, I_pi_inv = mixture_proportions_info(pi, N_j)
+        # Build complete info matrix
+        I_comp = np.zeros((big_dim, big_dim))
+        I_comp[0:k, 0:k] = I_pi
+        for j in range(k):
+            row_start = k + j * d
+            I_comp[row_start:row_start + d, row_start:row_start + d] = I_blocks[j]
 
-    # 3) Dirichlet blocks
-    # For each cluster j, we compute a single_dirichlet_info with n_j = N_j[j].
-    # Then place that block into the big matrix along the diagonal.
-    I_blocks = []
-    I_inv_blocks = []
-    for j in range(k):
-        alpha_j = alpha[j]          # shape (d,)
-        n_j = N_j[j]                # either integer or fractional
-        I_j, I_j_inv = single_dirichlet_info(alpha_j, n_j)
-        I_blocks.append(I_j)
-        I_inv_blocks.append(I_j_inv)
+        # Compute missing info
+        I_miss = np.zeros_like(I_comp)
+        I_miss[0:k, 0:k] = missing_info_pi(pi, gamma)
 
-    # 4) Combine into a big block-diagonal
-    big_dim = k + k*d
-    I_total = np.zeros((big_dim, big_dim))
-    I_total_inv = np.zeros((big_dim, big_dim))
+        for j in range(k):
+            row_start = k + j * d
+            I_miss_alpha_j = missing_info_alpha(alpha[j], gamma[:, j], x)
+            I_miss[row_start:row_start + d, row_start:row_start + d] = I_miss_alpha_j
 
-    # (a) place the (k x k) mixture block at top-left
-    I_total[0:k, 0:k] = I_pi
-    I_total_inv[0:k, 0:k] = I_pi_inv
+        # Observed Info
+        I_obs = I_comp - I_miss
 
-    # (b) place each (d x d) block for alpha_j
-    #    index offset in the big matrix: row,col start = k + j*d
-    for j in range(k):
-        row_start = k + j*d
-        row_end   = k + (j+1)*d
-        I_total[row_start:row_end, row_start:row_end] = I_blocks[j]
-        I_total_inv[row_start:row_end, row_start:row_end] = I_inv_blocks[j]
+        # Attempt inverse and standard errors
+        try:
+            I_obs_inv = np.linalg.inv(I_obs)
+        except np.linalg.LinAlgError:
+            I_obs_inv = np.linalg.pinv(I_obs)
 
-    # 5) Standard errors from diagonal of the inverse
-    var_diag = np.diag(I_total_inv)
-    se_total = np.sqrt(var_diag)
+        var_diag = np.diag(I_obs_inv)
+        # print(var_diag)
+        se_obs = np.sqrt(var_diag)
 
-    return I_total, se_total
+        return I_obs, se_obs
+    elif method == "louis":
+        IM = empirical_info_matrix(pi, alpha, gamma, x, mode)
+        try:
+            IM_inv = np.linalg.inv(IM)
+        except np.linalg.LinAlgError:
+            IM_inv = np.linalg.pinv(IM)
+        SE = np.sqrt(np.diag(IM_inv))
+
+        return IM, SE
+    else:
+        raise NotImplementedError("Please use louis or score method. Other methods are not implemented!")
 
 def dirichlet_kl_divergence(alpha1, alpha2):
     """

@@ -158,7 +158,7 @@ def dirichlet_mix_mle_highdimensional(x: np.ndarray, gamma: np.ndarray, alpha_in
         with Pool() as pool:
             # Prepare arguments for parallel computation
             args_list = [(copy.deepcopy(alpha_old[o][i]), copy.deepcopy(alpha_old[o]), log_x[i,o]) for i in range(p)]
-            
+
             # Use the Pool to parallelize the computation
             alpha_new = pool.map(parallel_alpha_computation, args_list)
         # for i in range(p):
@@ -206,10 +206,10 @@ def dirichlet_mix_mle_approx(x: np.ndarray, gamma: np.ndarray, alpha_init):
             with Pool(processes=16) as pool:
                 # Prepare arguments for parallel computation
                 args_list = [(copy.deepcopy(alpha_old[o][i]), beta, log_x[i,o]) for i in range(p)]
-                
+
                 # Use the Pool to parallelize the computation
                 alpha_new = pool.map(parallel_alpha_computation2, args_list)
-            
+
         alpha_all.append(alpha_new)
 
     return alpha_all
@@ -286,7 +286,7 @@ def dirichlet_mean_identical_precision_mle_approx(x: np.ndarray, gamma: np.ndarr
 
 
 def dirichlet_mean_known_precision_mle(x: np.ndarray, gamma: np.ndarray, alpha_init,true_s):
-    
+
     alpha_1 = _fit_m_known_s(x, gamma, alpha_init,true_s)
     return alpha_1
 
@@ -669,7 +669,7 @@ class DMM_Soft(BaseMixture):
         self.initialization=initialization
         self.method = method
         self.family = "dirichlet"
-        
+
     def _log_pdf_dirichlet(self,X,alphas):
         threshold = 1e-10
         N,p=X.shape
@@ -685,11 +685,11 @@ class DMM_Soft(BaseMixture):
                     t2=np.sum(gammaln(alpha))
                     t3=gammaln(np.sum(alpha))
                     probs[i,j]=np.sum(t1)-t2+t3
-        return probs    
-    
+        return probs
+
     def _estimate_weighted_log_prob_identical(self, X, alpha, pi):
         return self._log_pdf_dirichlet(X,alpha) + np.log(pi)
-    
+
     def fit(self,sample,true_m=None,true_s=None):
         start_time = time.time()
         self.data = self._process_data(sample)
@@ -726,8 +726,8 @@ class DMM_Soft(BaseMixture):
             print("Soft DMM Fitting Done Successfully")
         end_time = time.time()
         self.execution_time=end_time-start_time
-    
-    
+
+
     def get_params(self):
         #print("The estimated pi values are ", self.pi_new)
         #print("The estimated alpha values are ", self.alpha_new)
@@ -750,7 +750,7 @@ class DMM_Soft(BaseMixture):
 
     def get_precision(self):
         preci=[np.sum(al) for al in self.alpha_new]
-        
+
         return preci
 
     def responsibilities(self):
@@ -759,15 +759,15 @@ class DMM_Soft(BaseMixture):
 
     def n_iter(self):
         return len(self.log_likelihoods)
-    
-    def get_info_mat(self):
-        IM, SE = combined_info_and_se(self.pi_new, np.array(self.alpha_new), self.gamma_temp_ar, mode = "soft")
-        
+
+    def get_info_mat(self, method="score"):
+        IM, SE = combined_info_and_se(self.pi_new, np.array(self.alpha_new), self.gamma_temp_ar, self.data, method, mode = "soft")
+
         return IM, SE
-        
-        
-        
-        
+
+
+
+
 
     # def clustered_data(self):
     #     return pd.DataFrame(self.data_cwise).transpose()
@@ -792,5 +792,3 @@ class DMM_Soft(BaseMixture):
     #     entropy=np.sum(entropy_s)
 
     #     return ((self.k-1)+(self.k*self.p))*np.log(self.n) - 2*(self.log_likelihood_new) - entropy
-
-    
