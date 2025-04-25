@@ -7,6 +7,91 @@ import pandas as pd
 import conorm
 from scipy.special import gammaln, psi,digamma
 import scipy.special as sp
+from scipy.stats import norm
+
+def wald_confidence_intervals_dmm(mle, info_matrix, alpha=0.05):
+    """
+    Compute Wald confidence intervals for a Dirichlet Mixture Model (DMM).
+
+    Parameters
+    ----------
+    mle : tuple
+        (pi, alphas):
+        - pi: list of K mixture weights (summing to 1)
+        - alphas: list of K lists of Dirichlet parameters
+
+    info_matrix : ndarray
+        The full observed information matrix (negative Hessian of log-likelihood),
+        shape: (K + K*D, K + K*D)
+
+    alpha : float
+        Significance level for (1 - alpha)*100% confidence intervals
+
+    Returns
+    -------
+    list of tuples
+        Each tuple contains (lower_bound, upper_bound) for each parameter,
+        in the order: [pi_1, ..., pi_K, alpha_11, ..., alpha_KD]
+    """
+    pi, alphas = mle
+    K = len(pi)
+    D = len(alphas[0])
+    total_params = K + K * D
+
+    # Invert the information matrix to get covariance matrix
+    cov_matrix = np.linalg.inv(info_matrix)
+
+    z = norm.ppf(1 - alpha / 2)
+    ci_list = []
+
+    # --- Step 1: ALR transform of pi and delta method SEs ---
+    pi = np.array(pi)
+    eta = np.log(pi[:-1] / pi[-1])  # K−1 transformed weights
+    for k in range(K - 1):
+        # gradient of eta_k = log(pi_k / pi_K)
+        grad = np.zeros(K)
+        grad[k] = 1 / pi[k]
+        grad[K - 1] = -1 / pi[K - 1]
+        var_eta_k = grad @ cov_matrix[:K, :K] @ grad.T
+        se_eta_k = np.sqrt(var_eta_k)
+
+        # Wald CI in eta space
+        eta_low = eta[k] - z * se_eta_k
+        eta_high = eta[k] + z * se_eta_k
+
+        # Back-transform to get pi_k bounds
+        exp_low = np.exp(eta_low)
+        exp_high = np.exp(eta_high)
+        sum_exp_low = exp_low + sum(np.exp(np.delete(eta, k)))
+        sum_exp_high = exp_high + sum(np.exp(np.delete(eta, k)))
+        pi_k_low = exp_low / (1 + sum_exp_low)
+        pi_k_high = exp_high / (1 + sum_exp_high)
+        ci_list.append((pi_k_low, pi_k_high))
+
+    # Now get CI for pi_K
+    grad = np.zeros(K)
+    grad[K - 1] = 1 / pi[K - 1]
+    var_log_piK = grad @ cov_matrix[:K, :K] @ grad.T
+    se_log_piK = np.sqrt(var_log_piK)
+
+    eta_K = np.log(pi[K - 1])
+    eta_low = eta_K - z * se_log_piK
+    eta_high = eta_K + z * se_log_piK
+    ci_list.append((np.exp(eta_low), np.exp(eta_high)))  # CI for pi_K
+
+    # --- Step 2: log-transform alpha and delta method SEs ---
+    flat_alphas = [a for alpha_k in alphas for a in alpha_k]
+    for i in range(K * D):
+        alpha_hat = flat_alphas[i]
+        idx = K + i  # offset in full param vector
+        var_alpha = cov_matrix[idx, idx]
+        se_log_alpha = np.sqrt(var_alpha) / alpha_hat  # delta method
+        log_alpha = np.log(alpha_hat)
+        ci_low = np.exp(log_alpha - z * se_log_alpha)
+        ci_high = np.exp(log_alpha + z * se_log_alpha)
+        ci_list.append((ci_low, ci_high))
+
+    return ci_list
 
 
 def score_vector_observation(pi, alpha, x_i, gamma_i):
