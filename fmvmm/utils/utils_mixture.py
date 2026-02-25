@@ -35,39 +35,96 @@ def sample_mixture_distribution(N, rand_func, pis, alphas, mixture_type="identic
     labels : array, shape (N,)
         Integer labels (0,1,...,K-1) indicating which component each sample belongs to.
     """
+    # rng = np.random.default_rng(random_state)
+    # K = len(pis)
+
+    # # Fix the assertion:
+    # if mixture_type != "identical":
+        # assert isinstance(rand_func, list) and K == len(rand_func), \
+            # "For non-identical mixtures, rand_func must be a list of length K."
+
+    # # Compute number of samples for each component (except last)
+    # sample_counts = [int(np.floor(N * pi)) for pi in pis[:-1]]
+    # sample_counts.append(N - sum(sample_counts))  # Ensure total samples sum to N
+
+    # # Generate samples from each component and store labels
+    # samples = []
+    # labels = []
+    # for k in range(K):
+        # M_k = sample_counts[k]  # Number of samples for this component
+        # if M_k > 0:
+            # if mixture_type == "identical":
+                # samples.append(rand_func(*alphas[k], M_k))  # Call the single generator
+            # else:
+                # samples.append(rand_func[k](*alphas[k], M_k))  # Call the specific function for k
+            # labels.extend([k] * M_k)  # Assign component label k to these samples
+
+    # # Concatenate samples and labels
+    # X = np.vstack(samples)
+    # labels = np.array(labels)
+
+    # # Shuffle samples and labels together
+    # indices = np.arange(N)
+    # rng.shuffle(indices)
+    # X = X[indices]
+    # labels = labels[indices]
+
+    # return X, labels
     rng = np.random.default_rng(random_state)
+    pis = np.asarray(pis, dtype=float)
+    pis = pis / pis.sum()
     K = len(pis)
 
-    # Fix the assertion:
     if mixture_type != "identical":
         assert isinstance(rand_func, list) and K == len(rand_func), \
             "For non-identical mixtures, rand_func must be a list of length K."
 
-    # Compute number of samples for each component (except last)
-    sample_counts = [int(np.floor(N * pi)) for pi in pis[:-1]]
-    sample_counts.append(N - sum(sample_counts))  # Ensure total samples sum to N
+    # Allocate counts via multinomial (exact total N, reproducible)
+    sample_counts = rng.multinomial(N, pis)
 
-    # Generate samples from each component and store labels
     samples = []
     labels = []
+
+    # Helper to draw reproducibly from a generator that may/may-not accept random_state
+    def _draw(func, params, size, rng):
+        # Try SciPy-style: func(alpha, size=..., random_state=...)
+        try:
+            return func(*params, size=size, random_state=rng)
+        except TypeError:
+            # Fallback: seed global RNG deterministically for this draw
+            # (keeps reproducibility while staying compatible with older/custom generators)
+            seed = int(rng.integers(0, 2**32 - 1))
+            state = np.random.get_state()
+            np.random.seed(seed)
+            try:
+                return func(*params, size)
+            finally:
+                np.random.set_state(state)
+
     for k in range(K):
-        M_k = sample_counts[k]  # Number of samples for this component
-        if M_k > 0:
-            if mixture_type == "identical":
-                samples.append(rand_func(*alphas[k], M_k))  # Call the single generator
-            else:
-                samples.append(rand_func[k](*alphas[k], M_k))  # Call the specific function for k
-            labels.extend([k] * M_k)  # Assign component label k to these samples
+        M_k = int(sample_counts[k])
+        if M_k <= 0:
+            continue
 
-    # Concatenate samples and labels
+        if mixture_type == "identical":
+            Xk = _draw(rand_func, alphas[k], M_k, rng)
+        else:
+            Xk = _draw(rand_func[k], alphas[k], M_k, rng)
+
+        Xk = np.asarray(Xk)
+        if Xk.ndim == 1:
+            Xk = Xk.reshape(-1, 1)
+
+        samples.append(Xk)
+        labels.extend([k] * M_k)
+
     X = np.vstack(samples)
-    labels = np.array(labels)
+    labels = np.asarray(labels, dtype=int)
 
-    # Shuffle samples and labels together
-    indices = np.arange(N)
-    rng.shuffle(indices)
-    X = X[indices]
-    labels = labels[indices]
+    # Shuffle together (reproducible)
+    idx = rng.permutation(N)
+    X = X[idx]
+    labels = labels[idx]
 
     return X, labels
 

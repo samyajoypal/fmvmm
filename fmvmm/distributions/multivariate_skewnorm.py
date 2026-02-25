@@ -1,6 +1,6 @@
 """
 Most of the codes are used from git repository mvem. Huge thanks to the
-devoloper. 
+devoloper.
 
 """
 
@@ -51,7 +51,7 @@ def _check_params(mu, sigma, lmbda):
     # reshape mu, lmbda to (d,1)
     if len(mu.shape) == 1: mu = mu[:, None]
     if len(lmbda.shape) == 1: lmbda = lmbda[:, None]
-    
+
     # assert shapes (d,1), (d,d), (d,1)
     d00, d01 = mu.shape
     d10, d11 = lmbda.shape
@@ -59,7 +59,7 @@ def _check_params(mu, sigma, lmbda):
     assert d00==d10==d20, "mu, sigma, lmbda must have same dimension d"
     assert d20==d21, "sigma must be qudratic with shape dxd"
     assert d01==1 and d11==1, "second dimension of mu, lmbda must be 1"
-    
+
     return mu, sigma, lmbda
 
 def mean(mu, sigma, lmbda):
@@ -76,7 +76,7 @@ def mean(mu, sigma, lmbda):
     :return: The mean of the specified distribution.
     :rtype: np.ndarray with shape (p,).
     """
-    mu, sigma, lmbda = _check_params(mu, sigma, lmbda)    
+    mu, sigma, lmbda = _check_params(mu, sigma, lmbda)
 
     val, vec = np.linalg.eig(sigma)
     sigma_half = vec @ np.diag(val**(1/2)) @ vec.T
@@ -98,7 +98,7 @@ def var(mu, sigma, lmbda):
     :rtype: np.ndarray with shape (p,).
     """
     mu, sigma, lmbda = _check_params(mu, sigma, lmbda)
-    
+
     val, vec = np.linalg.eig(sigma)
     sigma_half = vec @ np.diag(val**(1/2)) @ vec.T
     delta = lmbda / np.sqrt(1 + np.sum(lmbda**2))
@@ -122,7 +122,7 @@ def logpdf(x, mu, sigma, lmbda):
     :rtype: np.ndarray with shape (p,).
     """
     mu, sigma, lmbda = _check_params(mu, sigma, lmbda)
-    
+
     x    = mvn._process_quantiles(x, len(mu))
     pdf  = mvn(mu.flatten(), sigma,allow_singular=True).logpdf(x)
     sigma=make_matrix_non_singular(sigma)
@@ -172,7 +172,7 @@ def loglike(x, mu, sigma, lmbda):
 
 def total_params(mu, sigma, lmbda):
     p = len(mu)
-    
+
     return 2*p + (p*(p+1)/2)
 
 def rvs(mu, sigma, lmbda, size=1):
@@ -222,25 +222,25 @@ def fit(x, maxiter = 100, ptol = 1e-6, ftol = 1e-10, eps=0.9, return_loglike = F
     :param maxiter: The maximum number of iterations to use in the EM algorithm.
         Defaults to 100.
     :type maxiter: int, optional
-    :param ptol: The relative convergence criterion for the estimated 
+    :param ptol: The relative convergence criterion for the estimated
         parameters. Defaults to 1e-6.
     :type ptol: float, optional
-    :param ftol: The relative convergence criterion for the log-likelihood 
+    :param ftol: The relative convergence criterion for the log-likelihood
         function. Defaults to np.inf.
     :type ftol: float, optional
     :param eps: Initialization shrinkage of delta parameter. Defaults to 0.9.
     :type eps: float, optional
-    :param return_loglike: Return a list of log-likelihood values at each iteration. 
+    :param return_loglike: Return a list of log-likelihood values at each iteration.
         Defaults to False.
     :type return_loglike: np.ndarray, optional
     :return: The fitted parameters (<array> mu, <array> scale, <array> nu). Also returns
-        a list of log-likelihood values at each iteration of the EM algorithm if 
+        a list of log-likelihood values at each iteration of the EM algorithm if
         ``return_loglike=True``.
     :rtype: tuple
     """
 
     def _ll(xi, n, omega_inv_half, delta):
-    
+
         d = xi.shape[1]
         lmbda = delta / np.sqrt(1 - np.sum(delta**2))
         wx = xi @ omega_inv_half
@@ -248,10 +248,10 @@ def fit(x, maxiter = 100, ptol = 1e-6, ftol = 1e-10, eps=0.9, return_loglike = F
         pdf = scipy.stats.multivariate_normal.pdf(wx, np.zeros(d), np.eye(d))
         ww = n * np.log(2) + np.sum(np.log(cdf)) + np.sum(np.log(pdf)) + n*np.log(np.linalg.det(omega_inv_half))
         return ww
-    
+
     itereps = 10e-6
     n, p = x.shape
-    
+
     # get pseudo moment estiators???
     m1 = np.mean(x, axis=0)
     center = x - m1
@@ -268,8 +268,8 @@ def fit(x, maxiter = 100, ptol = 1e-6, ftol = 1e-10, eps=0.9, return_loglike = F
     omega0_half = vec @ np.diag(val**(1/2)) @ vec.T
 
     delta0 = omega0_inv_half @ gam
-    
-    
+
+
     if (np.sum(delta0**2) > 1):
         delta0 = eps * delta0 / np.sqrt(np.sum(delta0**2))
 
@@ -277,11 +277,11 @@ def fit(x, maxiter = 100, ptol = 1e-6, ftol = 1e-10, eps=0.9, return_loglike = F
     mu1 = mu0
     omega1 = omega0
     delta1 = delta0
-    
+
     ll_val = np.array([_ll(x - mu0, n, omega0_inv_half, delta0)])
-    
+
     for i in range(maxiter):
-        
+
         # E-step
         xi0 = x - mu0
         lmbda0 = delta0 / np.sqrt(1 - np.sum(delta0**2))
@@ -292,16 +292,16 @@ def fit(x, maxiter = 100, ptol = 1e-6, ftol = 1e-10, eps=0.9, return_loglike = F
 
         yexabs = tau0 * w1 * (pdf/cdf + wa)
         yex2   = tau0**2 * w1**2 * wa * (pdf/cdf + wa + 1/wa)
-        
+
         # M-step
         mu1 = m1 - (omega0_half @ delta0)/tau0 * np.mean(yexabs)
         tau1 = np.mean(yex2)**(1/2)
         omega1 = (x-mu1).T @ (x-mu1) / n
         val, vec = np.linalg.eig(omega1)
         omega1_inv_half = vec @ np.diag(val**(-1/2)) @ vec.T
-        omega1_half = vec @ np.diag(val**(1/2)) @ vec.T        
+        omega1_half = vec @ np.diag(val**(1/2)) @ vec.T
         delta1 = omega1_inv_half @ (yexabs @ (x-mu1))/(n*tau1)
-        
+
 
         # measure log likelihood
         ll_val = np.append(ll_val, _ll(x-mu1, n, omega1_inv_half, delta1))
@@ -331,21 +331,38 @@ def fit(x, maxiter = 100, ptol = 1e-6, ftol = 1e-10, eps=0.9, return_loglike = F
     return mu1, omega1, lmbda0
 
 def info_mat(X,mu,sigma,lmbda):
-    
+
     p =len(mu)
     g = 1
-    
+
     IM = info_matrix_skewnormal(
     X, [1], [mu], [sigma], [lmbda],
-    d_mixedmvSN_func=d_mixedmvSN, 
-    dmvSN_func=dmvSN, 
-    g=g, 
+    d_mixedmvSN_func=d_mixedmvSN,
+    dmvSN_func=dmvSN,
+    g=g,
     p=p
 )
-    
+
     final_IM = expand_reduced_IM_to_full_no_pi(IM, p, g)
-    
+
     return final_IM
+
+def score_mat(X,mu,sigma,lmbda):
+
+    p =len(mu)
+    g = 1
+
+    _, S = info_matrix_skewnormal(
+    X, [1], [mu], [sigma], [lmbda],
+    d_mixedmvSN_func=d_mixedmvSN,
+    dmvSN_func=dmvSN,
+    g=g,
+    p=p, return_scores= True
+)
+
+    # final_IM = expand_reduced_IM_to_full_no_pi(IM, p, g)
+
+    return S
 
 def expand_reduced_IM_to_full_no_pi(IM_reduced, p, g):
     """

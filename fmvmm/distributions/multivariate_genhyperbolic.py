@@ -1,6 +1,6 @@
 """
 Most of the codes are used from git repository mvem. Huge thanks to the
-devoloper. 
+devoloper.
 
 """
 
@@ -11,6 +11,12 @@ from fmvmm.distributions.gig import _besselM3, _check_gig_pars
 from fmvmm.distributions import gig
 import warnings
 import math
+from fmvmm.utils.utils_dist import (
+    pack_gh_family_unconstrained,
+    unpack_gh_family_unconstrained,
+    score_mat_fd_unconstrained,
+    info_opg_from_scores,
+)
 
 def custom_log(input_value):
     if input_value == 0:
@@ -76,21 +82,21 @@ def logpdf(x, lmbda, chi, psi, mu, sigma, gamma):
             interm = chi + Q
 
             log_const_top = -lmbda * np.log(chi) + gammaln(-lmbda_min_d_2)
-            
+
             log_const_bottom = d/2 * np.log(np.pi) + 0.5 * np.log(det_sigma) + gammaln(-lmbda)
-            
+
             log_top = lmbda_min_d_2 * np.log(interm)
-            
+
 
             out = log_const_top + log_top - log_const_bottom
 
         else:
             # Asymmetric student's t
-            
+
             interm = np.sqrt((chi + Q) * skewness_norm)
 
             log_const_top = -lmbda * np.log(chi) - lmbda_min_d_2 * np.log(skewness_norm)
-            log_const_bottom = (d/2 * np.log(2 * np.pi) + 0.5 * np.log(det_sigma) + 
+            log_const_bottom = (d/2 * np.log(2 * np.pi) + 0.5 * np.log(det_sigma) +
                 gammaln(-lmbda) - (lmbda + 1) * np.log(2))
             log_top = _besselM3(lmbda_min_d_2, interm, logvalue = True) + skewness_scaled
             log_bottom = -lmbda_min_d_2 * np.log(interm)
@@ -190,7 +196,7 @@ def loglike(x, lmbda, chi, psi, mu, sigma, gamma):
 
 def total_params(lmbda, chi, psi, mu, sigma, gamma):
     p = len(mu)
-    
+
     return 3 + 2*p + (p*(p+1)/2)
 
 
@@ -220,7 +226,7 @@ def rvs(lmbda, chi, psi, mu, sigma, gamma, size=1):
     Z = np.random.normal(size=(size, d))
     A = np.linalg.cholesky(sigma).T
     W = gig.rvs(lmbda, chi, psi, size)
-    
+
     return np.sqrt(W)[:, np.newaxis] * Z.dot(A) + np.tile(mu, (size, 1)) + np.outer(W, gamma)
 
 def mean(lmbda, chi, psi, mu, sigma, gamma):
@@ -502,7 +508,7 @@ def fitghypmv(
 
     n, d = x.shape
     chi, psi = _alphabar2chipsi(alpha_bar, lmbda)
-    
+
 
     # check parameters of the mixing distribution for consistency
     _check_gig_pars(lmbda, chi, psi)
@@ -561,10 +567,10 @@ def fitghypmv(
 
         diff = x-mu
         Q = np.sum((diff @ inv_sigma.T) * diff, axis=1)
-        
+
         # Offset = (gamma @ inv_sigma) @ gamma
         Offset = gamma @ inv_sigma @ gamma.T
-   
+
         delta = gig.expect(lmbda-d/2, Q+chi, psi+Offset, func = "1/x")
         delta_bar = np.mean(delta)
         eta = gig.expect(lmbda-d/2, Q+chi, psi+Offset, func = "x")
@@ -580,7 +586,7 @@ def fitghypmv(
 
         diff = x - mu
         tmp = delta[:, None] * diff
-        
+
         if opt_pars["sigma"]:
             sigma = (tmp.T @ diff)/n - np.outer(gamma, gamma) * eta_bar
             # print("sigma",sigma)
@@ -590,36 +596,36 @@ def fitghypmv(
 
         inv_sigma = np.linalg.inv(sigma)
         Q = np.sum((diff @ inv_sigma) * diff, axis=1)
-        
+
         Offset = gamma @ inv_sigma @ gamma.T
-        
+
         xi_sum = np.sum(gig.expect(lmbda-d/2, Q+chi, psi+Offset, func="logx"))
-        
+
 
         if alpha_bar==0 and lmbda > 0 and not opt_pars["alpha_bar"] and opt_pars["lmbda"]:
             ##<------  VG case  ------>
-            
+
             eta_sum = np.sum(gig.expect(lmbda-d/2, Q+chi, psi+Offset, func="x"))
-            
+
             minimizer_kwargs = {"method": "L-BFGS-B","args":(eta_sum, xi_sum, n)}
-            
+
             x0= np.log(lmbda)
-            
+
             tmp_fit = scipy.optimize.minimize(vg_optfunc, x0, args=(eta_sum, xi_sum, n), method='L-BFGS-B') #method='L-BFGS-B',np.log(lmbda)+2
-            
+
             lmbda = np.exp(tmp_fit["x"])
-            
+
 
         elif alpha_bar==0 and lmbda<0 and not opt_pars["alpha_bar"] and opt_pars["lmbda"]:
             ##<------  Student-t case  ------>
             delta_sum = np.sum(gig.expect(lmbda-d/2, Q+chi, psi+Offset, func="1/x"))
-            
+
             x0= custom_log(-1 - lmbda) #np.log(lmbda) np.random.rand()
             tmp_fit = scipy.optimize.minimize(t_optfunc, x0, args=(delta_sum, xi_sum, n), method='L-BFGS-B') #custom_log(-1 - lmbda)+10
-            
+
             lmbda = (-1 - np.exp(tmp_fit["x"]))
-            
-            
+
+
 
         elif opt_pars["lmbda"] or opt_pars["alpha_bar"]:
             ##<------  ghyp, hyp, NIG case  ------>
@@ -632,13 +638,13 @@ def fitghypmv(
             pars_order = np.array(list(thepars.keys()) + list(mix_pars_fixed.keys()))
             thepars_v = np.array(list(thepars.values())).flatten()
             mix_pars_fixed_v = np.array(list(mix_pars_fixed.values())).flatten()
-            
+
 
 
             tmp_fit = scipy.optimize.minimize(gig_optfunc, thepars_v, args=(
                 mix_pars_fixed_v, pars_order, delta_sum, eta_sum, xi_sum, n), method='L-BFGS-B')
-            
-            par = np.concatenate([tmp_fit["x"], mix_pars_fixed_v]) 
+
+            par = np.concatenate([tmp_fit["x"], mix_pars_fixed_v])
 
 
             lmbda = par[pars_order == "lmbda"]
@@ -650,12 +656,12 @@ def fitghypmv(
             if np.isneginf(alpha_bar):
                 alpha_bar=-50
             if np.isposinf(alpha_bar):
-                alpha_bar=50 
-                
+                alpha_bar=50
+
 
 
         chi, psi = _alphabar2chipsi(alpha_bar, lmbda)
-        
+
 
         ## Test for convergence
         ll_old = ll
@@ -754,7 +760,7 @@ def fit(x, lmbda=1, alpha_bar=1, symmetric=False, standardize=False, nit=2000,
         each iteration of the EM algorithm if ``return_loglike=True``.
     :rtype: tuple
     """
-    
+
     opt_pars = {"lmbda": True, "alpha_bar": True,
                 "mu": True, "sigma": True, "gamma": True}
 
@@ -772,16 +778,64 @@ def fit(x, lmbda=1, alpha_bar=1, symmetric=False, standardize=False, nit=2000,
          chi, psi = 0, 2 * fit["lmbda"]
     elif fit["alpha_bar"]==0 and fit["lmbda"] < 0:
          chi, psi = -2 * (fit["lmbda"] + 1), 0
-    
-    
+
+
     if return_loglike:
         return fit["lmbda"], chi, psi, fit["mu"], fit["sigma"], fit["gamma"], fit["ll"]
     return fit["lmbda"], chi, psi, fit["mu"], fit["sigma"], fit["gamma"]
 
 
-def info_mat(x, lmbda, chi, psi, mu, sigma, gamma):
-    from fmvmm.utils.utils_fmm import compute_info_scipy_fmvmm
-    
-    IM = compute_info_scipy_fmvmm(logpdf,[lmbda, np.array([chi]), np.array([psi]), mu, sigma, gamma],x)
-    
-    return IM
+# def info_mat(x, lmbda, chi, psi, mu, sigma, gamma):
+#     from fmvmm.utils.utils_fmm import compute_info_scipy_fmvmm
+#
+#     IM = compute_info_scipy_fmvmm(logpdf,[lmbda, np.array([chi]), np.array([psi]), mu, sigma, gamma],x)
+#
+#     return IM
+
+def score_mat(x, lmbda, chi, psi, mu, sigma, gamma, step=1e-5):
+    """
+    Per-observation score matrix wrt unconstrained u.
+    Returns S with shape (n, d).
+    """
+    x = np.asarray(x, float)
+    p = x.shape[1]
+
+    # pack constrained -> unconstrained
+    u_hat = pack_gh_family_unconstrained(
+        p=p,
+        lmbda=lmbda,
+        chi=chi,
+        psi=psi,
+        mu=mu,
+        sigma=sigma,
+        gamma=gamma,
+        free=("lmbda", "chi", "psi")
+    )
+
+    def _unpack(u, *, p):
+        return unpack_gh_family_unconstrained(
+            u,
+            p=p,
+            fixed={},
+            free=("lmbda", "chi", "psi")
+        )
+
+    S = score_mat_fd_unconstrained(
+        x,
+        u_hat=u_hat,
+        unpack_fun=_unpack,
+        logpdf_fun=logpdf,
+        p=p,
+        step=step,
+        rel_step=True
+    )
+
+    return S
+
+def info_mat(x, lmbda, chi, psi, mu, sigma, gamma, step=1e-5, ridge=1e-8):
+    """
+    OPG observed information matrix.
+    """
+    S = score_mat(x, lmbda, chi, psi, mu, sigma, gamma, step=step)
+    I, cov, se = info_opg_from_scores(S, ridge=ridge)
+    return I

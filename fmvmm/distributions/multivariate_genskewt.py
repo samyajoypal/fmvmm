@@ -1,11 +1,17 @@
 """
 Most of the codes are used from git repository mvem. Huge thanks to the
-devoloper. 
+devoloper.
 
 """
 
 import numpy as np
 from fmvmm.distributions import multivariate_genhyperbolic as ghypmv
+from fmvmm.utils.utils_dist import (
+    pack_gh_family_unconstrained,
+    unpack_gh_family_unconstrained,
+    score_mat_fd_unconstrained,
+    info_opg_from_scores,
+)
 
 def logpdf(x, lmbda, chi, mu, sigma, gamma):
     """
@@ -78,7 +84,7 @@ def loglike(x, lmbda, chi, mu, sigma, gamma):
 
 def total_params(lmbda, chi, mu, sigma, gamma):
     p = len(mu)
-    
+
     return 2 + 2*p + (p*(p+1)/2)
 
 
@@ -201,9 +207,57 @@ def fit(x, lmbda=-1.75, symmetric=False, standardize=False, nit=2000, reltol=1e-
         return fit["lmbda"], chi, fit["mu"], fit["sigma"], fit["gamma"], fit["ll"]
     return fit["lmbda"], chi, fit["mu"], fit["sigma"], fit["gamma"]
 
-def info_mat(x, lmbda, chi, mu, sigma, gamma):
-    from fmvmm.utils.utils_fmm import compute_info_scipy_fmvmm
-    
-    IM = compute_info_scipy_fmvmm(logpdf,[lmbda, np.array([chi]), mu, sigma, gamma],x)
-    
-    return IM
+# def info_mat(x, lmbda, chi, mu, sigma, gamma):
+#     from fmvmm.utils.utils_fmm import compute_info_scipy_fmvmm
+#
+#     IM = compute_info_scipy_fmvmm(logpdf,[lmbda, np.array([chi]), mu, sigma, gamma],x)
+#
+#     return IM
+
+def score_mat(x, lmbda, chi, mu, sigma, gamma, step=1e-5):
+    """
+    Per-observation score matrix wrt unconstrained vector u.
+    Here psi is fixed at 0 (skew-t subfamily).
+    Returns S with shape (n, d_u).
+    """
+    x = np.asarray(x, float)
+    p = x.shape[1]
+
+    # pack constrained -> unconstrained (free: lmbda, chi; psi fixed)
+    u_hat = pack_gh_family_unconstrained(
+        p=p,
+        lmbda=lmbda, chi=chi, psi=0.0,
+        mu=mu, sigma=sigma, gamma=gamma,
+        free=("lmbda", "chi"),
+    )
+
+    def _unpack(u, *, p):
+        return unpack_gh_family_unconstrained(
+            u, p=p,
+            fixed={"psi": 0.0},
+            free=("lmbda", "chi"),
+        )
+
+    # logpdf_fun must accept full GH order (including psi)
+    def _logpdf_fun(X, lmbda_, chi_, psi_, mu_, sigma_, gamma_):
+        return ghypmv.logpdf(X, lmbda_, chi_, 0.0, mu_, sigma_, gamma_)
+
+    S = score_mat_fd_unconstrained(
+    x,
+    u_hat=u_hat,
+    unpack_fun=_unpack,
+    logpdf_fun=_logpdf_fun,
+    p=p,
+    step=step,
+)
+    return S
+
+
+def info_mat(x, lmbda, chi, mu, sigma, gamma, step=1e-5, ridge=1e-8):
+    """
+    OPG information matrix for skew-t (psi fixed at 0).
+    Backward compatible signature: returns IM only.
+    """
+    S = score_mat(x, lmbda, chi, mu, sigma, gamma, step=step)
+    I, cov, se = info_opg_from_scores(S, ridge=ridge)
+    return I

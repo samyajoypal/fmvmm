@@ -5,35 +5,35 @@ from fmvmm.mixtures.skewslashmix_smsn import dmvSS, d_mixedmvSS
 from fmvmm.mixsmsn.information_matrix_smsn import info_matrix_skewslash
 
 def logpdf(x,mu, sigma, lmbda, nu):
-    
+
     return np.log(skewslashmix_smsn.dmvSS(x,mu, sigma, lmbda, nu))
 
 def pdf(x,mu, sigma, lmbda, nu):
-    
+
     return skewslashmix_smsn.dmvSS(x,mu, sigma, lmbda, nu)
 
 def loglike(x,mu, sigma, lmbda, nu):
-    
+
     return np.sum(logpdf(x, mu, sigma, lmbda, nu))
 
 def total_params(mu, sigma, lmbda, nu):
     p = len(mu)
-    
+
     return 2*p + (p*(p+1)/2) +1
 
 def rvs(mu, sigma, lmbda, nu, size = 1):
-    
+
     return gen_SS_multi(size, mu, sigma, lmbda, nu)
 
 def fit(x):
     model = skewslashmix_smsn.SkewSlashMix(1, verbose = False)
     model.fit(x)
     _, alphas = model.get_params()
-    
+
     return alphas[0][0], alphas[0][1], alphas[0][2], np.array([alphas[0][3]])
 
 def info_mat(X,mu,sigma,lmbda,nu):
-    
+
     p =len(mu)
     g = 1
     if isinstance(nu, np.ndarray):
@@ -44,11 +44,27 @@ def info_mat(X,mu,sigma,lmbda,nu):
     dmvSS_func=dmvSS,
     g=g, p=p
 )
-    
+
     final_IM = expand_reduced_IM_to_full_no_pi_skewslash(IM, p, g)
-    
+
     return final_IM
 
+def score_mat(X,mu,sigma,lmbda,nu):
+
+    p =len(mu)
+    g = 1
+    if isinstance(nu, np.ndarray):
+        nu = nu[0]
+    _, S = info_matrix_skewslash(
+    X, [1], [mu], [sigma], [lmbda], nu,
+    d_mixedmvSS_func=d_mixedmvSS,
+    dmvSS_func=dmvSS,
+    g=g, p=p, return_scores= True
+)
+    
+    # final_IM = expand_reduced_IM_to_full_no_pi_skewslash(IM, p, g)
+
+    return S
 
 def expand_reduced_IM_to_full_no_pi_skewslash(IM_reduced, p, g):
     """

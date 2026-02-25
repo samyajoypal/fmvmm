@@ -1,11 +1,17 @@
 """
 Most of the codes are used from git repository mvem. Huge thanks to the
-devoloper. 
+devoloper.
 
 """
 
 import numpy as np
 from fmvmm.distributions import multivariate_genhyperbolic as ghypmv
+from fmvmm.utils.utils_dist import (
+    pack_gh_family_unconstrained,
+    unpack_gh_family_unconstrained,
+    score_mat_fd_unconstrained,
+    info_opg_from_scores,
+)
 
 def logpdf(x, chi, psi, mu, sigma, gamma):
     """
@@ -80,7 +86,7 @@ def loglike(x, chi, psi, mu, sigma, gamma):
 
 def total_params(chi, psi, mu, sigma, gamma):
     p = len(mu)
-    
+
     return 2 + 2*p + (p*(p+1)/2)
 
 def rvs(chi, psi, mu, sigma, gamma, size):
@@ -206,9 +212,58 @@ def fit(x, alpha_bar=1, symmetric=False, standardize=False, nit=2000, reltol=1e-
         return fit["lmbda"], chi, psi, fit["mu"], fit["sigma"], fit["gamma"], fit["ll"]
     return chi, psi, fit["mu"], fit["sigma"], fit["gamma"]
 
-def info_mat(x, chi, psi, mu, sigma, gamma):
-    from fmvmm.utils.utils_fmm import compute_info_scipy_fmvmm
-    
-    IM = compute_info_scipy_fmvmm(logpdf,[np.array([chi]), np.array([psi]), mu, sigma, gamma],x)
-    
-    return IM
+# def info_mat(x, chi, psi, mu, sigma, gamma):
+#     from fmvmm.utils.utils_fmm import compute_info_scipy_fmvmm
+#
+#     IM = compute_info_scipy_fmvmm(logpdf,[np.array([chi]), np.array([psi]), mu, sigma, gamma],x)
+#
+#     return IM
+
+def score_mat(x, chi, psi, mu, sigma, gamma, step=1e-5):
+    """
+    Per-observation score matrix wrt unconstrained vector u.
+    Hyperbolic: lmbda fixed at (p+1)/2, chi/psi free.
+    Returns S with shape (n, d_u).
+    """
+    x = np.asarray(x, float)
+    p = x.shape[1]
+    lmbda_fixed = (p + 1) / 2.0
+
+    # pack constrained -> unconstrained (free: chi, psi; lmbda fixed)
+    u_hat = pack_gh_family_unconstrained(
+        p=p,
+        lmbda=lmbda_fixed, chi=chi, psi=psi,
+        mu=mu, sigma=sigma, gamma=gamma,
+        free=("chi", "psi"),
+    )
+
+    def _unpack(u, *, p):
+        return unpack_gh_family_unconstrained(
+            u, p=p,
+            fixed={"lmbda": lmbda_fixed},
+            free=("chi", "psi"),
+        )
+
+    # logpdf_fun must accept full GH order (including lmbda)
+    def _logpdf_fun(X, lmbda_, chi_, psi_, mu_, sigma_, gamma_):
+        return ghypmv.logpdf(X, lmbda_fixed, chi_, psi_, mu_, sigma_, gamma_)
+
+    S = score_mat_fd_unconstrained(
+        x,
+        u_hat=u_hat,
+        unpack_fun=_unpack,
+        logpdf_fun=_logpdf_fun,
+        p=p,
+        step=step,
+    )
+    return S
+
+
+def info_mat(x, chi, psi, mu, sigma, gamma, step=1e-5, ridge=1e-8):
+    """
+    OPG information matrix for hyperbolic (lmbda fixed).
+    Backward compatible signature: returns IM only.
+    """
+    S = score_mat(x, chi, psi, mu, sigma, gamma, step=step)
+    I, cov, se = info_opg_from_scores(S, ridge=ridge)
+    return I

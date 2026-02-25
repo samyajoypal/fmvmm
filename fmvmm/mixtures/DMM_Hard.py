@@ -14,7 +14,7 @@ from scipy.special import gammaln,logsumexp
 from scipy.special import polygamma, psi, digamma
 import sys
 from fmvmm.mixtures._base import BaseMixture
-from fmvmm.utils.utils_dmm import combined_info_and_se
+from fmvmm.utils.utils_dmm import combined_info_and_se, mean_precision_inference
 
 
 MAXINT = sys.maxsize
@@ -22,7 +22,7 @@ euler = -1 * psi(1)  # Euler-Mascheroni constant
 
 
 
-def estimate_alphas(data_cwise, alpha_not,dist_comb, method):
+def estimate_alphas(data_cwise, alpha_not,dist_comb, method,post_m_step):
     alpha_new = []
     for t in range(len(data_cwise)):
         if np.array(data_cwise[t]).ndim == 1:
@@ -68,7 +68,7 @@ class DMM_Hard(BaseMixture):
     def _estimate_weighted_log_prob_identical(self, X, alpha, pi):
         return self._log_pdf_dirichlet(X,alpha) + np.log(pi)
 
-    def fit(self,sample):
+    def fit(self,sample, post_m_step=None):
         start_time = time.time()
         self.data = self._process_data(sample)
         self.n, self.p = self.data.shape
@@ -87,7 +87,7 @@ class DMM_Hard(BaseMixture):
 
         self.alpha_temp = self.alpha_not
         self.pi_temp = self.pi_not
-        pi_new,alpha_new, log_likelihood_new,log_gamma_new=self._fit(self.data,self.pi_temp,self.alpha_temp,estimate_alphas,method=self.method)
+        pi_new,alpha_new, log_likelihood_new,log_gamma_new=self._fit(self.data,self.pi_temp,self.alpha_temp,estimate_alphas,method=self.method, post_m_step=post_m_step)
         estimated_mean = []
         for a in alpha_new:
             mean_temp = [b/np.sum(a) for b in a]
@@ -142,6 +142,25 @@ class DMM_Hard(BaseMixture):
         IM, SE = combined_info_and_se(self.pi_new, np.array(self.alpha_new), self.gamma_temp_ar, self.data,method, mode = "hard")
 
         return IM, SE
+    
+    def get_mean_precision_inference(self, method="score", alpha=0.05):
+        I, _ = self.get_info_mat(method=method)
+        cov = np.linalg.pinv(I)
+
+        K, p = self.alpha_new.shape
+        offset = (K-1)
+
+        results = []
+
+        for j in range(K):
+            idx = slice(offset + j*p, offset + (j+1)*p)
+            cov_alpha = cov[idx, idx]
+            alpha_hat = self.alpha_new[j]
+
+            res = mean_precision_inference(alpha_hat, cov_alpha, alpha)
+            results.append(res)
+
+        return results
 
     # def clustered_data(self):
     #     return pd.DataFrame(self.data_cwise).transpose()

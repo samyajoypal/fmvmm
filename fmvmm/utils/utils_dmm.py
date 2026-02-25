@@ -5,24 +5,89 @@ from scipy.stats import dirichlet
 import math
 import pandas as pd
 import conorm
-from scipy.special import gammaln, psi,digamma
+from scipy.special import gammaln, psi, digamma
 import scipy.special as sp
 from scipy.stats import norm
+
+# =============================================================================
+# Helpers: ALR (reference = last component) and Jacobians
+# =============================================================================
+
+_EPS = 1e-15
+
+def alr_transform(pi):
+    """
+    ALR transform with reference component pi_K (last component).
+    pi: shape (K,), positive, sums to 1
+    returns eta: shape (K-1,)
+    """
+    pi = np.asarray(pi, dtype=float)
+    pi = np.clip(pi, _EPS, 1.0)
+    pi = pi / pi.sum()
+    return np.log(pi[:-1] / pi[-1])
+
+def alr_inverse(eta):
+    """
+    Inverse ALR transform with reference component pi_K (last component).
+    eta: shape (K-1,)
+    returns pi: shape (K,)
+    """
+    eta = np.asarray(eta, dtype=float)
+    exp_eta = np.exp(eta)
+    denom = 1.0 + exp_eta.sum()
+    pi = np.empty(len(eta) + 1, dtype=float)
+    pi[:-1] = exp_eta / denom
+    pi[-1] = 1.0 / denom
+    return pi
+
+def jacobian_pi_wrt_eta(pi):
+    """
+    Jacobian J = d pi / d eta for ALR with reference last component.
+    pi: shape (K,)
+    returns J: shape (K, K-1)
+    """
+    pi = np.asarray(pi, dtype=float)
+    K = len(pi)
+    p = pi[:-1]  # length K-1
+    J = np.zeros((K, K-1), dtype=float)
+
+    # For j=1..K-1, r=1..K-1:
+    # d pi_j / d eta_r = pi_j (delta_{jr} - pi_r)
+    for j in range(K - 1):
+        for r in range(K - 1):
+            J[j, r] = p[j] * ((1.0 if j == r else 0.0) - p[r])
+
+    # For j=K:
+    # d pi_K / d eta_r = - pi_K * pi_r
+    for r in range(K - 1):
+        J[K - 1, r] = -pi[K - 1] * p[r]
+
+    return J
+
+# =============================================================================
+# Wald CIs (works with info in unconstrained coordinates: eta + alpha_flat)
+# =============================================================================
 
 def wald_confidence_intervals_dmm(mle, info_matrix, alpha=0.05):
     """
     Compute Wald confidence intervals for a Dirichlet Mixture Model (DMM).
 
+    IMPORTANT (correct implementation):
+    - The information matrix is assumed to be for an unconstrained parameterization:
+        theta_tilde = (eta_1,...,eta_{K-1}, alpha_11,...,alpha_KD),
+      where eta is the ALR transform of pi with reference pi_K.
+    - This avoids singularity from the simplex constraint.
+
     Parameters
     ----------
     mle : tuple
         (pi, alphas):
-        - pi: list of K mixture weights (summing to 1)
-        - alphas: list of K lists of Dirichlet parameters
+        - pi: list/array of K mixture weights (summing to 1)
+        - alphas: list of K lists (or array KxD) of Dirichlet parameters
 
     info_matrix : ndarray
-        The full observed information matrix (negative Hessian of log-likelihood),
-        shape: (K + K*D, K + K*D)
+        Observed information matrix on unconstrained scale,
+        shape: ((K-1) + K*D, (K-1) + K*D)
 
     alpha : float
         Significance level for (1 - alpha)*100% confidence intervals
@@ -34,57 +99,81 @@ def wald_confidence_intervals_dmm(mle, info_matrix, alpha=0.05):
         in the order: [pi_1, ..., pi_K, alpha_11, ..., alpha_KD]
     """
     pi, alphas = mle
-    K = len(pi)
-    D = len(alphas[0])
-    total_params = K + K * D
+    pi = np.asarray(pi, dtype=float)
+    pi = np.clip(pi, _EPS, 1.0)
+    pi = pi / pi.sum()
 
-    # Invert the information matrix to get covariance matrix
-    cov_matrix = np.linalg.inv(info_matrix)
+    alphas = np.asarray(alphas, dtype=float)
+    if alphas.ndim == 1:
+        raise ValueError("alphas must be 2D: shape (K, D)")
+    K = len(pi)
+    D = alphas.shape[1]
+
+    expected_dim = (K - 1) + K * D
+    if info_matrix.shape != (expected_dim, expected_dim):
+        raise ValueError(
+            f"info_matrix must have shape {(expected_dim, expected_dim)} "
+            f"for (eta, alpha) parameterization, got {info_matrix.shape}."
+        )
+
+    # Covariance on unconstrained scale
+    try:
+        cov_matrix = np.linalg.inv(info_matrix)
+    except np.linalg.LinAlgError:
+        cov_matrix = np.linalg.pinv(info_matrix)
 
     z = norm.ppf(1 - alpha / 2)
     ci_list = []
 
-    # --- Step 1: ALR transform of pi and delta method SEs ---
-    pi = np.array(pi)
-    eta = np.log(pi[:-1] / pi[-1])  # K−1 transformed weights
-    for k in range(K - 1):
-        # gradient of eta_k = log(pi_k / pi_K)
-        grad = np.zeros(K)
-        grad[k] = 1 / pi[k]
-        grad[K - 1] = -1 / pi[K - 1]
-        var_eta_k = grad @ cov_matrix[:K, :K] @ grad.T
-        se_eta_k = np.sqrt(var_eta_k)
+    # --- Step 1: CIs for pi via ALR coordinates eta ---
+    eta_hat = alr_transform(pi)  # length K-1
+    cov_eta = cov_matrix[:(K-1), :(K-1)]
 
-        # Wald CI in eta space
-        eta_low = eta[k] - z * se_eta_k
-        eta_high = eta[k] + z * se_eta_k
+    # CI for each eta_j
+    eta_ci = []
+    for j in range(K - 1):
+        se_eta_j = np.sqrt(max(cov_eta[j, j], 0.0))
+        eta_low = eta_hat[j] - z * se_eta_j
+        eta_high = eta_hat[j] + z * se_eta_j
+        eta_ci.append((eta_low, eta_high))
 
-        # Back-transform to get pi_k bounds
-        exp_low = np.exp(eta_low)
-        exp_high = np.exp(eta_high)
-        sum_exp_low = exp_low + sum(np.exp(np.delete(eta, k)))
-        sum_exp_high = exp_high + sum(np.exp(np.delete(eta, k)))
-        pi_k_low = exp_low / (1 + sum_exp_low)
-        pi_k_high = exp_high / (1 + sum_exp_high)
-        ci_list.append((pi_k_low, pi_k_high))
+    # Back-transform each eta_j interval holding other eta's fixed at eta_hat
+    # This matches your manuscript approach and keeps pi in the simplex.
+    for j in range(K - 1):
+        eta_low_vec = eta_hat.copy()
+        eta_high_vec = eta_hat.copy()
+        eta_low_vec[j] = eta_ci[j][0]
+        eta_high_vec[j] = eta_ci[j][1]
+        pi_low = alr_inverse(eta_low_vec)
+        pi_high = alr_inverse(eta_high_vec)
 
-    # Now get CI for pi_K
-    grad = np.zeros(K)
-    grad[K - 1] = 1 / pi[K - 1]
-    var_log_piK = grad @ cov_matrix[:K, :K] @ grad.T
+        # componentwise bounds for pi_j under this 1D perturbation
+        ci_list.append((min(pi_low[j], pi_high[j]), max(pi_low[j], pi_high[j])))
+
+    # CI for pi_K: use delta method on log(pi_K) from cov_eta (consistent and correct)
+    # log pi_K = - log(1 + sum exp(eta_r))
+    # gradient: d log pi_K / d eta_r = - pi_r  (for r=1..K-1)
+    p = pi[:-1]  # pi_r, r=1..K-1
+    grad_log_piK = -p  # shape (K-1,)
+    var_log_piK = float(grad_log_piK @ cov_eta @ grad_log_piK.T)
+    var_log_piK = max(var_log_piK, 0.0)
     se_log_piK = np.sqrt(var_log_piK)
 
-    eta_K = np.log(pi[K - 1])
-    eta_low = eta_K - z * se_log_piK
-    eta_high = eta_K + z * se_log_piK
-    ci_list.append((np.exp(eta_low), np.exp(eta_high)))  # CI for pi_K
+    log_piK = np.log(pi[-1])
+    log_piK_low = log_piK - z * se_log_piK
+    log_piK_high = log_piK + z * se_log_piK
+    ci_list.append((np.exp(log_piK_low), np.exp(log_piK_high)))
 
-    # --- Step 2: log-transform alpha and delta method SEs ---
-    flat_alphas = [a for alpha_k in alphas for a in alpha_k]
+    # --- Step 2: log-transform alpha and delta method SEs (diagonal only) ---
+    # cov entries correspond to alpha_flat appended after eta
+    flat_alphas = alphas.reshape(-1)  # length K*D
     for i in range(K * D):
-        alpha_hat = flat_alphas[i]
-        idx = K + i  # offset in full param vector
-        var_alpha = cov_matrix[idx, idx]
+        alpha_hat = float(flat_alphas[i])
+        alpha_hat = max(alpha_hat, _EPS)
+        idx = (K - 1) + i
+        var_alpha = float(cov_matrix[idx, idx])
+        var_alpha = max(var_alpha, 0.0)
+
         se_log_alpha = np.sqrt(var_alpha) / alpha_hat  # delta method
         log_alpha = np.log(alpha_hat)
         ci_low = np.exp(log_alpha - z * se_log_alpha)
@@ -93,103 +182,77 @@ def wald_confidence_intervals_dmm(mle, info_matrix, alpha=0.05):
 
     return ci_list
 
+# =============================================================================
+# Score vectors (unconstrained: eta + alpha)
+# =============================================================================
 
 def score_vector_observation(pi, alpha, x_i, gamma_i):
     """
-    Computes the score vector for a single observation x_i, given:
-        - pi: shape (k,)
-        - alpha: shape (k, d)
-        - x_i: shape (d,)
-        - gamma_i: shape (k,)
-    Returns:
-        - score_i: shape (k + k*d,)
-    """
-    k, d = alpha.shape
-    score_pi = gamma_i / pi  # shape (k,)
-    score_alpha = []
+    Computes the score vector for a single observation x_i on the UNCONSTRAINED scale:
+        theta_tilde = (eta_1,...,eta_{k-1}, alpha_11,...,alpha_kd)
 
+    - eta is ALR(pi) with reference pi_k.
+    - alpha is unchanged.
+    Returns:
+        score_i: shape ((k-1) + k*d,)
+    """
+    pi = np.asarray(pi, dtype=float)
+    pi = np.clip(pi, _EPS, 1.0)
+    pi = pi / pi.sum()
+
+    alpha = np.asarray(alpha, dtype=float)
+    k, d = alpha.shape
+
+    x_i = np.asarray(x_i, dtype=float)
+    x_i = np.clip(x_i, _EPS, 1.0)
+
+    gamma_i = np.asarray(gamma_i, dtype=float)
+
+    # Score w.r.t eta_r (r=1..k-1): s_i(eta_r) = gamma_ir - pi_r
+    score_eta = gamma_i[:k-1] - pi[:k-1]  # shape (k-1,)
+
+    # Score w.r.t alpha
+    score_alpha_blocks = []
+    logx = np.log(x_i)
     for j in range(k):
         alpha_j = alpha[j]
         alpha_sum = np.sum(alpha_j)
-        grad = sp.psi(alpha_sum) - sp.psi(alpha_j) + np.log(x_i)  # shape (d,)
-        score_alpha_j = gamma_i[j] * grad
-        score_alpha.append(score_alpha_j)
+        grad = sp.psi(alpha_sum) - sp.psi(alpha_j) + logx  # shape (d,)
+        score_alpha_blocks.append(gamma_i[j] * grad)
 
-    score_alpha = np.concatenate(score_alpha)  # shape (k*d,)
-    return np.concatenate([score_pi, score_alpha])  # shape (k + k*d,)
+    score_alpha = np.concatenate(score_alpha_blocks)  # shape (k*d,)
+    return np.concatenate([score_eta, score_alpha])
 
 def empirical_info_matrix(pi, alpha, gamma, x, mode='soft'):
     """
-    Computes the empirical observed information matrix using the score vector method.
-    mode: 'soft' or 'hard'
+    Empirical observed information matrix using outer products of individual scores.
+    Computed on UNCONSTRAINED scale (eta + alpha), so it is invertible in theory.
+
     Returns:
-        - I_emp: empirical observed info matrix (k + k*d, k + k*d)
+        I_emp: shape ((k-1) + k*d, (k-1) + k*d)
     """
     if mode == 'hard':
         gamma = hard_assignments(gamma)
 
+    x = np.asarray(x, dtype=float)
+    x = np.clip(x, _EPS, 1.0)
+
     N, d = x.shape
     k = len(pi)
-    big_dim = k + k * d
-    I_emp = np.zeros((big_dim, big_dim))
+    big_dim = (k - 1) + k * d
+    I_emp = np.zeros((big_dim, big_dim), dtype=float)
 
     for i in range(N):
-        score_i = score_vector_observation(pi, alpha, x[i], gamma[i])
-        I_emp += np.outer(score_i, score_i)
+        s_i = score_vector_observation(pi, alpha, x[i], gamma[i])
+        I_emp += np.outer(s_i, s_i)
 
     return I_emp
 
-def missing_info_pi(pi, gamma):
-    """
-    Computes the missing information matrix (covariance of score) for π.
-
-    Parameters:
-    - pi: shape (K,)
-    - gamma: shape (n, K)
-
-    Returns:
-    - I_missing: shape (K, K)
-    """
-    n, K = gamma.shape
-    I_missing = np.zeros((K, K))
-
-    for k in range(K):
-        for j in range(K):
-            if k == j:
-                I_missing[k, k] = np.sum(gamma[:, k] * (1 - gamma[:, k])) / pi[k]**2
-            else:
-                I_missing[k, j] = -np.sum(gamma[:, k] * gamma[:, j]) / (pi[k] * pi[j])
-
-    return I_missing
-
-def missing_info_alpha(alpha_j, gamma_j, x):
-    """
-    Compute the missing information matrix for one Dirichlet component's alpha_j.
-    gamma_j: (N,) vector of posterior probs for component j
-    x: (N, d) data matrix
-    """
-    N, d = x.shape
-    alpha_sum = np.sum(alpha_j)
-    psi_sum = sp.psi(alpha_sum)
-    psi_j = sp.psi(alpha_j)
-
-    A = psi_sum - psi_j + np.log(x)  # shape (N, d)
-
-    # Compute missing info matrix: sum_i gamma_{ij} (1 - gamma_{ij}) A_i A_i^T
-    weights = gamma_j * (1 - gamma_j)  # shape (N,)
-    I_miss = np.zeros((d, d))
-    for i in range(N):
-        outer = np.outer(A[i], A[i])
-        I_miss += weights[i] * outer
-    return I_miss
-
+# =============================================================================
+# Louis method pieces (full blocks, correct)
+# =============================================================================
 
 def hard_assignments(gamma):
-    """
-    Convert soft responsibilities (rows sum to 1) into hard 0/1 assignments
-    by taking argmax in each row. Returns a new array with exactly one '1'
-    per row, and zeros elsewhere.
-    """
     n_data, k = gamma.shape
     hard = np.zeros_like(gamma)
     max_indices = np.argmax(gamma, axis=1)
@@ -197,17 +260,275 @@ def hard_assignments(gamma):
     return hard
 
 def mixture_counts(gamma, mode='soft'):
-    """
-    Depending on mode='soft' or 'hard', return the cluster counts N_j for j=1..k
-    and the total N = sum_j N_j.
-    """
     if mode == 'hard':
         gamma_hard = hard_assignments(gamma)
-        N_j = np.sum(gamma_hard, axis=0)  # integer counts
+        N_j = np.sum(gamma_hard, axis=0)
     else:
-        N_j = np.sum(gamma, axis=0)      # sum of partial responsibilities
+        N_j = np.sum(gamma, axis=0)
     N = np.sum(N_j)
     return N_j, N
+
+def single_dirichlet_info(alpha_j, n_j, ridge_factor=1e-10, use_pinv=False):
+    """
+    Correct Dirichlet information for one component on the raw alpha scale.
+    Returns I_alpha and a robust inverse.
+    """
+    alpha_j = np.asarray(alpha_j, dtype=float)
+    alpha_j = np.clip(alpha_j, _EPS, np.inf)
+
+    d = len(alpha_j)
+    alpha_sum = float(np.sum(alpha_j))
+
+    D_vals = n_j * sp.polygamma(1, alpha_j)      # n_j * trigamma(alpha_jm)
+    psi_sum = sp.polygamma(1, alpha_sum)         # trigamma(sum alpha_j)
+    G = - n_j * psi_sum                          # off-diagonal contribution
+
+    I_alpha = np.diag(D_vals) + G * np.ones((d, d), dtype=float)
+
+    M = I_alpha.shape[0]
+    try:
+        I_alpha_inv = np.linalg.inv(I_alpha)
+    except np.linalg.LinAlgError:
+        if use_pinv:
+            I_alpha_inv = np.linalg.pinv(I_alpha)
+        else:
+            ridge_mat = I_alpha + ridge_factor * np.eye(M)
+            try:
+                I_alpha_inv = np.linalg.inv(ridge_mat)
+            except np.linalg.LinAlgError:
+                I_alpha_inv = np.linalg.pinv(ridge_mat)
+
+    return I_alpha, I_alpha_inv
+
+def missing_info_alpha(alpha_j, gamma_j, x):
+    """
+    Missing information for one alpha_j block:
+        sum_i gamma_ij (1-gamma_ij) A_i A_i^T
+    """
+    x = np.asarray(x, dtype=float)
+    x = np.clip(x, _EPS, 1.0)
+
+    gamma_j = np.asarray(gamma_j, dtype=float)
+    alpha_j = np.asarray(alpha_j, dtype=float)
+    alpha_j = np.clip(alpha_j, _EPS, np.inf)
+
+    N, d = x.shape
+    alpha_sum = float(np.sum(alpha_j))
+
+    A = (sp.psi(alpha_sum) - sp.psi(alpha_j) + np.log(x))  # (N,d)
+    w = gamma_j * (1.0 - gamma_j)                          # (N,)
+    # weighted sum of outer products
+    I_miss = np.zeros((d, d), dtype=float)
+    for i in range(N):
+        I_miss += w[i] * np.outer(A[i], A[i])
+    return I_miss
+
+def louis_info_full_unconstrained(pi, alpha, gamma, x, mode='soft'):
+    """
+    Full Louis observed information on UNCONSTRAINED parameterization:
+        theta_tilde = (eta_1,...,eta_{k-1}, alpha_11,...,alpha_kd)
+
+    Includes cross-block terms:
+        I_obs(eta, alpha_j) and I_obs(alpha_j, alpha_r) for j != r.
+
+    Returns:
+        I_obs: shape ((k-1) + k*d, (k-1) + k*d)
+    """
+    if mode == 'hard':
+        gamma = hard_assignments(gamma)
+
+    pi = np.asarray(pi, dtype=float)
+    pi = np.clip(pi, _EPS, 1.0)
+    pi = pi / pi.sum()
+
+    alpha = np.asarray(alpha, dtype=float)
+    k, d = alpha.shape
+
+    x = np.asarray(x, dtype=float)
+    x = np.clip(x, _EPS, 1.0)
+
+    gamma = np.asarray(gamma, dtype=float)
+    N = gamma.shape[0]
+
+    big_dim = (k - 1) + k * d
+    I_comp = np.zeros((big_dim, big_dim), dtype=float)
+    I_miss = np.zeros((big_dim, big_dim), dtype=float)
+
+    # ---- (A) eta block: complete and missing ----
+    # Complete info for eta (k-1 x k-1): N * (diag(p) - p p^T), p = pi[0:k-1]
+    p = pi[:k-1]
+    I_comp_eta = N * (np.diag(p) - np.outer(p, p))
+
+    # Missing info for eta: sum_i Cov(I_r, I_s | x_i) for r,s=1..k-1
+    # Cov(I_r, I_s|x_i) = gamma_ir (delta_rs - gamma_is), for r,s<k
+    I_miss_eta = np.zeros((k - 1, k - 1), dtype=float)
+    g_sub = gamma[:, :k-1]  # (N, k-1)
+    for i in range(N):
+        gi = g_sub[i]
+        I_miss_eta += np.diag(gi) - np.outer(gi, gi)
+
+    I_comp[:k-1, :k-1] = I_comp_eta
+    I_miss[:k-1, :k-1] = I_miss_eta
+
+    # Precompute A_i^{(j)} for all i,j: A[j][i, m]
+    logx = np.log(x)
+    A_all = []
+    for j in range(k):
+        alpha_j = np.clip(alpha[j], _EPS, np.inf)
+        a_sum = float(np.sum(alpha_j))
+        A_all.append(sp.psi(a_sum) - sp.psi(alpha_j) + logx)  # (N,d)
+
+    # ---- (B) alpha blocks: complete and missing (within-block) ----
+    N_j = gamma.sum(axis=0)  # (k,)
+    for j in range(k):
+        I_j, _ = single_dirichlet_info(alpha[j], N_j[j])
+        rs = (k - 1) + j * d
+        I_comp[rs:rs + d, rs:rs + d] = I_j
+        I_miss[rs:rs + d, rs:rs + d] = missing_info_alpha(alpha[j], gamma[:, j], x)
+
+    # ---- (C) cross blocks from missing information only ----
+    # (C1) eta - alpha cross:
+    # For r=1..k-1, component j=1..k:
+    # I_obs(eta_r, alpha_{jm}) = -Cov(s_eta^c, s_alpha^c)
+    # s_eta^c = I_r - pi_r, s_alpha^c = I_j A^{(j)}.
+    # Cov(I_r, I_j|x_i) = gamma_ir(1-gamma_ir) if j=r; else -gamma_ir gamma_ij
+    # => I_obs = - sum_i Cov * A
+    for r in range(k - 1):
+        for j in range(k):
+            if j == r:
+                w = gamma[:, r] * (1.0 - gamma[:, r])      # (N,)
+                block = - (w[:, None] * A_all[j]).sum(axis=0)  # (d,)
+            else:
+                w = gamma[:, r] * gamma[:, j]              # (N,)
+                block = (w[:, None] * A_all[j]).sum(axis=0)   # (d,)
+
+            # place into I_miss then later subtract, or directly into I_obs via I_comp=0
+            # Here: cross blocks are missing-only, so I_comp cross=0 and I_obs cross = -I_miss cross.
+            # Our computed "block" already equals I_obs(eta_r, alpha_j*) as per formulas above.
+            row = r
+            col_start = (k - 1) + j * d
+            I_comp[row, col_start:col_start + d] = 0.0
+            I_comp[col_start:col_start + d, row] = 0.0
+
+            # Store in I_obs directly later. For now, fill I_miss so that I_obs=I_comp-I_miss works:
+            # Need I_miss cross = -I_obs cross
+            I_miss[row, col_start:col_start + d] = -block
+            I_miss[col_start:col_start + d, row] = -block
+
+    # (C2) alpha_j - alpha_r cross for j != r:
+    # I_obs(alpha_jm, alpha_rt) = sum_i gamma_ij gamma_ir A_im^{(j)} A_it^{(r)}
+    for j in range(k):
+        for r in range(k):
+            if r == j:
+                continue
+            w = gamma[:, j] * gamma[:, r]  # (N,)
+            # block (d x d): sum_i w_i * (A_j[i][:,None] * A_r[i][None,:])
+            block = np.zeros((d, d), dtype=float)
+            Aj = A_all[j]
+            Ar = A_all[r]
+            for i in range(N):
+                block += w[i] * np.outer(Aj[i], Ar[i])
+
+            rs_j = (k - 1) + j * d
+            rs_r = (k - 1) + r * d
+            # Again, cross blocks are missing-only, so I_obs cross = - I_miss cross.
+            # We want I_obs cross = block -> I_miss cross = -block
+            I_miss[rs_j:rs_j + d, rs_r:rs_r + d] = -block
+            I_miss[rs_r:rs_r + d, rs_j:rs_j + d] = -block.T
+
+    # ---- Observed information ----
+    I_obs = I_comp - I_miss
+    return I_obs
+
+# =============================================================================
+# Main entry: observed info + SE (Louis or score), consistent and correct
+# =============================================================================
+
+def combined_info_and_se(pi, alpha, gamma, x, method='score', mode='soft'):
+    """
+    Computes observed Fisher Information and SEs.
+
+    CORRECT VERSION:
+    - Works on UNCONSTRAINED parameterization:
+        theta_tilde = (eta_1,...,eta_{k-1}, alpha_11,...,alpha_kd),
+      where eta is ALR(pi) with reference last weight.
+    - This avoids singularity from the simplex constraint.
+    - Louis method includes cross-block terms (eta-alpha and alpha-alpha between components).
+
+    Returns:
+        I_obs: observed info matrix on unconstrained scale
+              shape ((k-1) + k*d, (k-1) + k*d)
+        se:    standard errors on the same unconstrained scale (sqrt(diag(inv(I_obs))))
+    """
+    if method == "louis":
+        I_obs = louis_info_full_unconstrained(pi, alpha, gamma, x, mode=mode)
+        try:
+            I_inv = np.linalg.inv(I_obs)
+        except np.linalg.LinAlgError:
+            I_inv = np.linalg.pinv(I_obs)
+        se = np.sqrt(np.maximum(np.diag(I_inv), 0.0))
+        return I_obs, se
+
+    elif method == "score":
+        IM = empirical_info_matrix(pi, alpha, gamma, x, mode=mode)
+        try:
+            IM_inv = np.linalg.inv(IM)
+        except np.linalg.LinAlgError:
+            IM_inv = np.linalg.pinv(IM)
+        se = np.sqrt(np.maximum(np.diag(IM_inv), 0.0))
+        return IM, se
+
+    else:
+        raise NotImplementedError("Please use louis or score method. Other methods are not implemented!")
+
+
+# -------------------------------------------------
+# Mean + precision inference via delta method
+# -------------------------------------------------
+
+def mean_precision_inference(alpha_hat, cov_alpha, alpha_level=0.05):
+    """
+    alpha_hat : (p,)
+    cov_alpha : (p,p)
+    """
+
+    p = len(alpha_hat)
+    z = norm.ppf(1 - alpha_level/2)
+
+    tau = alpha_hat.sum()
+    mu = alpha_hat / tau
+
+    # ---------- Precision ----------
+    ones = np.ones(p)
+    var_tau = ones @ cov_alpha @ ones
+    se_tau = np.sqrt(var_tau)
+    ci_tau = (tau - z*se_tau, tau + z*se_tau)
+
+    # ---------- Mean ----------
+    G = (np.eye(p) - np.outer(mu, np.ones(p))) / tau
+    cov_mu = G @ cov_alpha @ G.T
+    se_mu = np.sqrt(np.diag(cov_mu))
+
+    ci_mu = []
+    for m in range(p):
+        eta = np.log(mu[m]/(1-mu[m]))
+        se_eta = se_mu[m]/(mu[m]*(1-mu[m]))
+        lo = eta - z*se_eta
+        hi = eta + z*se_eta
+        ci_mu.append((
+            np.exp(lo)/(1+np.exp(lo)),
+            np.exp(hi)/(1+np.exp(hi))
+        ))
+
+    return {
+        "tau": tau,
+        "se_tau": se_tau,
+        "ci_tau": ci_tau,
+        "mu": mu,
+        "se_mu": se_mu,
+        "ci_mu": ci_mu
+    }
+
 
 def mixture_proportions_info(pi, N_j):
     """
@@ -225,134 +546,6 @@ def mixture_proportions_info(pi, N_j):
 
     return I_pi, I_pi_inv
 
-def single_dirichlet_info(alpha_j, n_j, ridge_factor=1e-10, use_pinv=False):
-    """
-    Compute the (d x d) Fisher info matrix and its inverse for ONE Dirichlet
-    parameter vector alpha_j of length d, given 'n_j' as the effective sample size
-    for that cluster (either sum of responsibilities if soft or integer if hard).
-
-    Using the closed-form:
-        I_alpha = D + G * 11^T,
-        I_alpha^-1 = D_star + beta * (a_star)(a_star)^T,
-
-    where:
-      - D = diag(n_j * psi'(alpha_j)),
-      - G = - n_j * psi'(sum(alpha_j)),
-      - D_star = diag(1 / [n_j * psi'(alpha_j)] ),
-      - a_star = [1 / psi'(alpha_j1), ..., 1 / psi'(alpha_jd]]^T,
-      - beta = [n_j * psi'(sum alpha_j)] / [1 - psi'(sum alpha_j)* sum(1/psi'(alpha_j))].
-    """
-    d = len(alpha_j)
-    alpha_sum = np.sum(alpha_j)
-
-    # D = diag(n_j * trigamma(alpha_j))
-    D_vals = n_j * sp.polygamma(1, alpha_j)  # shape (d,)
-    D = np.diag(D_vals)
-
-    # G = - n_j * trigamma(sum_j alpha_j)
-    psi_sum = sp.polygamma(1, alpha_sum)
-    G = - n_j * psi_sum
-
-    # => I_alpha (d x d)
-    I_alpha = D + G * np.ones((d, d))
-
-    # # Inverse
-    # D_star = np.diag(1.0 / D_vals)  # shape (d x d)
-    # a_star_vals = 1.0 / sp.polygamma(1, alpha_j)  # shape (d,)
-    # a_star = a_star_vals.reshape(-1,1)            # (d,1)
-
-    # denom = 1.0 - psi_sum * np.sum(a_star_vals)
-    # if abs(denom) < 1e-15:
-    #     raise ValueError("Denominator for beta is near zero; check alpha_j range or n_j.")
-
-    # beta = (n_j * psi_sum) / denom
-    # I_alpha_inv = D_star + beta * (a_star @ a_star.T)
-
-    # I_alpha_inv = np.linalg.inv(I_alpha)
-    M = I_alpha.shape[0]
-    # First attempt direct inverse
-    try:
-        I_alpha_inv = np.linalg.inv(I_alpha)
-    except np.linalg.LinAlgError:
-        # Direct inverse failed
-        if use_pinv:
-            # Use the pseudoinverse
-            I_alpha_inv = np.linalg.pinv(I_alpha)
-        else:
-            # Try adding a small ridge on the diagonal
-            ridge_mat = I_alpha + ridge_factor*np.eye(M)
-            # In case that also fails, we do a nested try:
-            try:
-                I_alpha_inv = np.linalg.inv(ridge_mat)
-            except np.linalg.LinAlgError:
-                # As a last fallback, use pseudoinverse of the ridge version
-                I_alpha_inv = np.linalg.pinv(ridge_mat)
-
-    return I_alpha, I_alpha_inv
-
-def combined_info_and_se(pi, alpha, gamma, x,method ='score', mode='soft'):
-    """
-    Computes observed Fisher Information and SEs by subtracting missing info from complete info.
-    Returns:
-        I_obs: observed info matrix
-        se_obs: sqrt of diagonal of inv(I_obs)
-    """
-    if method =="louis":
-        N_j, N = mixture_counts(gamma, mode=mode)
-        k = len(pi)
-        d = alpha.shape[1]
-        big_dim = k + k * d
-
-        # Complete info
-        I_pi, I_pi_inv = mixture_proportions_info(pi, N_j)
-        I_blocks = []
-        I_inv_blocks = []
-        for j in range(k):
-            I_j, I_j_inv = single_dirichlet_info(alpha[j], N_j[j])
-            I_blocks.append(I_j)
-            I_inv_blocks.append(I_j_inv)
-
-        # Build complete info matrix
-        I_comp = np.zeros((big_dim, big_dim))
-        I_comp[0:k, 0:k] = I_pi
-        for j in range(k):
-            row_start = k + j * d
-            I_comp[row_start:row_start + d, row_start:row_start + d] = I_blocks[j]
-
-        # Compute missing info
-        I_miss = np.zeros_like(I_comp)
-        I_miss[0:k, 0:k] = missing_info_pi(pi, gamma)
-
-        for j in range(k):
-            row_start = k + j * d
-            I_miss_alpha_j = missing_info_alpha(alpha[j], gamma[:, j], x)
-            I_miss[row_start:row_start + d, row_start:row_start + d] = I_miss_alpha_j
-
-        # Observed Info
-        I_obs = I_comp - I_miss
-
-        # Attempt inverse and standard errors
-        try:
-            I_obs_inv = np.linalg.inv(I_obs)
-        except np.linalg.LinAlgError:
-            I_obs_inv = np.linalg.pinv(I_obs)
-
-        var_diag = np.diag(I_obs_inv)
-        # print(var_diag)
-        se_obs = np.sqrt(var_diag)
-
-        return I_obs, se_obs
-    elif method == "score":
-        IM = empirical_info_matrix(pi, alpha, gamma, x, mode)
-        try:
-            IM_inv = np.linalg.inv(IM)
-        except np.linalg.LinAlgError:
-            IM_inv = np.linalg.pinv(IM)
-        SE = np.sqrt(np.diag(IM_inv))
-
-        return IM, SE
-    else:
-        raise NotImplementedError("Please use louis or score method. Other methods are not implemented!")
 
 def dirichlet_kl_divergence(alpha1, alpha2):
     """

@@ -49,7 +49,7 @@ def sample_skewlaplace(mu, Sigma, gamma,n, random_state=None):
     # Convert mu, gamma to NumPy arrays (if not already)
     mu = np.asarray(mu, dtype=float)
     gamma = np.asarray(gamma, dtype=float)
-    
+
     rng = np.random.default_rng(random_state)
     p = len(mu)
 
@@ -103,8 +103,8 @@ def compute_empirical_info_and_se(model, pi = None, alpha = None, data = None, g
         alpha_est = model.alpha_new  # length K
     else:
         alpha_est = alpha
-        
-    
+
+
 
     K = len(pi_est)
     # alpha_est[k][0] => mu_k
@@ -182,28 +182,34 @@ def compute_empirical_info_and_se(model, pi = None, alpha = None, data = None, g
 
             diff = x - mu_k
 
-            # eqn(4.3) => partial wrt mu_k => shape (p,)
-            s_mu_k = (
-                z_row[k_i]*v1_row[k_i]*(invS_k @ diff)
-                - z_row[k_i]*v2_row[k_i]*(invS_k @ g_k)
+            # # eqn(4.3) => partial wrt mu_k => shape (p,)
+            # s_mu_k = (
+            #     z_row[k_i]*v1_row[k_i]*(invS_k @ diff)
+            #     - z_row[k_i]*v2_row[k_i]*(invS_k @ g_k)
+            # )
+
+            # mu
+            s_mu_k = z_row[k_i] * (
+                v1_row[k_i]*(invS_k @ diff)
+                - (invS_k @ g_k)
             )
 
             # eqn(4.4) => partial wrt Sigma_k => shape (p(p+1)/2,)
             GkGkT = np.outer(g_k, g_k)
             outer_diff = np.outer(diff, diff)
-            
+
             A = (
                 invS_k
                 - v1_row[k_i] * (invS_k @ outer_diff @ invS_k)
                 - v2_row[k_i] * (invS_k @ GkGkT   @ invS_k)
             )
-            
-            
-            
+
+
+
             A_diag = np.diag(np.diag(A))          # shape (p,p) with only diagonal of A
             A_corrected = -A + 0.5 * A_diag       # the bracket in eqn. (4.4)
             sSigma_full = z_row[k_i] * A_corrected
-            
+
             # Flatten with vech-lower
             sSigma_k_list = []
             for ii in range(p):
@@ -211,11 +217,15 @@ def compute_empirical_info_and_se(model, pi = None, alpha = None, data = None, g
                     sSigma_k_list.append(sSigma_full[ii, jj])
             sSigma_k = np.array(sSigma_k_list)
 
-            # eqn(4.5) => partial wrt gamma_k => shape (p,)
-            s_gamma_k = (
-                z_row[k_i]*v1_row[k_i]*(invS_k @ diff)
-                - z_row[k_i]*v2_row[k_i]*(invS_k @ g_k)
-            )
+            # # eqn(4.5) => partial wrt gamma_k => shape (p,)
+            # s_gamma_k = (
+            #     z_row[k_i]*v1_row[k_i]*(invS_k @ diff)
+            #     - z_row[k_i]*v2_row[k_i]*(invS_k @ g_k)
+            # )
+            s_gamma_k = z_row[k_i] * (
+            (invS_k @ diff)
+            - v2_row[k_i]*(invS_k @ g_k)
+        )
 
             score_list.append(s_mu_k)
             score_list.append(sSigma_k)
@@ -243,7 +253,142 @@ def compute_empirical_info_and_se(model, pi = None, alpha = None, data = None, g
 
     return I_e, SE
 
+def compute_empirical_info_se_and_scores(
+    model,
+    pi=None,
+    alpha=None,
+    data=None,
+    gamma_res=None,
+    use_model=True,
+    return_cov=True,
+):
+    """
+    Same logic as compute_empirical_info_and_se(...), but ALSO returns
+    the per-observation score matrix S (n, d), so you can build OPG,
+    sandwich estimators, etc.
 
+    Returns
+    -------
+    I_e : (d,d)
+    SE  : (d,)
+    S   : (n,d)
+    Cov : (d,d)   (only if return_cov=True)
+    """
+
+    # ---------- 1) extract params ----------
+    if use_model:
+        pi_est = model.pi_new
+        alpha_est = model.alpha_new
+        X = model.data
+        Z = model.gamma_temp_ar
+    else:
+        pi_est = pi
+        alpha_est = alpha
+        X = data
+        Z = gamma_res
+
+    K = len(pi_est)
+    n = X.shape[0]
+    p = alpha_est[0][0].shape[0]
+
+    # ---------- 2) precompute inv(Sigma_k) and a_k ----------
+    inv_Sigmas = []
+    a_values = []
+    for k in range(K):
+        Sigma_k = alpha_est[k][1]
+        invS = np.linalg.inv(Sigma_k)
+        inv_Sigmas.append(invS)
+
+        g_k = alpha_est[k][2]
+        a_k = np.sqrt(1.0 + g_k @ invS @ g_k)
+        a_values.append(a_k)
+
+    # ---------- 3) compute V1,V2 ----------
+    # V1[i,k] = a_k / dist
+    # V2[i,k] = (1 + sqrt(a_k^2 * dist^2))/a_k^2
+    V1 = np.zeros((n, K), float)
+    V2 = np.zeros((n, K), float)
+
+    for i in range(n):
+        x_i = X[i]
+        for k in range(K):
+            mu_k = alpha_est[k][0]
+            invS = inv_Sigmas[k]
+            a_k = a_values[k]
+
+            diff = x_i - mu_k
+            dist_sq = float(diff @ invS @ diff)
+            dist_sq = max(dist_sq, 1e-14)
+            dist = np.sqrt(dist_sq)
+
+            V1[i, k] = a_k / dist
+            V2[i, k] = (1.0 + np.sqrt(a_k * a_k * dist_sq)) / (a_k * a_k)
+
+    # ---------- 4) score for a single observation ----------
+    def score_single_observation(x, z_row, v1_row, v2_row):
+        score_list = []
+
+        # (A) pi block (K-1) as in your existing code
+        for r in range(K - 1):
+            val = z_row[r] / pi_est[r] - z_row[K - 1] / pi_est[K - 1]
+            score_list.append(np.array([val], float))
+
+        # (B) component blocks
+        for k in range(K):
+            mu_k = alpha_est[k][0]
+            g_k = alpha_est[k][2]
+            invS = inv_Sigmas[k]
+
+            diff = x - mu_k
+
+            # mu-score (p,)
+            s_mu = z_row[k] * (v1_row[k] * (invS @ diff) - (invS @ g_k))
+
+            # Sigma-score (vech upper) (p(p+1)/2,)
+            GGT = np.outer(g_k, g_k)
+            outer_diff = np.outer(diff, diff)
+
+            A = (
+                invS
+                - v1_row[k] * (invS @ outer_diff @ invS)
+                - v2_row[k] * (invS @ GGT @ invS)
+            )
+            A_diag = np.diag(np.diag(A))
+            A_corrected = -A + 0.5 * A_diag
+            sSigma_full = z_row[k] * A_corrected
+
+            sSigma = []
+            for ii in range(p):
+                for jj in range(ii, p):
+                    sSigma.append(sSigma_full[ii, jj])
+            sSigma = np.array(sSigma, float)
+
+            # gamma-score (p,)
+            s_gamma = z_row[k] * ((invS @ diff) - v2_row[k] * (invS @ g_k))
+
+            score_list.append(s_mu)
+            score_list.append(sSigma)
+            score_list.append(s_gamma)
+
+        return np.concatenate(score_list)
+
+    # ---------- 5) build S and OPG ----------
+    s0 = score_single_observation(X[0], Z[0], V1[0], V2[0])
+    d = s0.size
+
+    S = np.zeros((n, d), float)
+    for i in range(n):
+        S[i, :] = score_single_observation(X[i], Z[i], V1[i], V2[i])
+
+    I_e = S.T @ S
+
+    # numerical safety (same spirit as your pinv)
+    Cov = np.linalg.pinv(I_e)
+    SE = np.sqrt(np.maximum(np.diag(Cov), 0.0))
+
+    if return_cov:
+        return I_e, SE, S, Cov
+    return I_e, SE, S
 
 
 def k_means_init_skewlaplace(X, k):
@@ -403,7 +548,7 @@ def estimate_alphas_skewlaplace(X, gamma_matrix, alpha_old):
         denom_k = sum_zk_v2[k] - (sum_zk[k]**2 / sum_zk_v1[k])
         if abs(denom_k) < 1e-14:
             denom_k = 1e-14 * np.sign(denom_k if denom_k != 0 else 1)
-        
+
         # part_k = sum_zk_x[k] - sum_zk[k]*( sum_zk_v1_x[k]/sum_zk_v1[k] )
         part_k = sum_zk_x[k] - sum_zk[k] * (sum_zk_v1_x[k]/sum_zk_v1[k])
         gk_new = part_k / denom_k  # shape (p,)
@@ -474,7 +619,7 @@ def compute_log_pdf_skewlaplace(X, mu_k, Sigma_k, gamma_k):
 
     log_probs = logC_k + exponent
     return log_probs
-    
+
 
 class SkewLaplaceMix(BaseMixture):
     def __init__(self,n_clusters,tol=0.0001,initialization="kmeans",print_log_likelihood=False,max_iter=25, verbose=True):
@@ -482,32 +627,32 @@ class SkewLaplaceMix(BaseMixture):
         self.k=n_clusters
         self.initialization=initialization
         self.family = "skew_laplace"
-        
+
     def _log_pdf_skewlaplace(self,X,alphas):
         """
         Returns an array of shape (N, K) where entry (i, k) is
         log [ f_k( X[i] ) ], the log of the k-th Skew-Laplace pdf at X[i].
-    
+
         X: shape (N, p)
         alphas: list of length K, each is {"mu": (p,), "Sigma": (p,p), "gamma": (p,)}.
         """
         N, p = X.shape
         K = len(alphas)
         log_probs = np.zeros((N, K))
-    
+
         for k in range(K):
             mu_k = alphas[k][0]        # shape (p,)
             Sigma_k = alphas[k][1]  # shape (p,p)
             gamma_k = alphas[k][2]  # shape (p,)
-    
+
             log_probs[:, k] = compute_log_pdf_skewlaplace(X, mu_k, Sigma_k, gamma_k)
-    
+
         return log_probs
-        
-    
+
+
     def _estimate_weighted_log_prob_identical(self, X, alpha, pi):
         return self._log_pdf_skewlaplace(X,alpha) + np.log(pi)
-    
+
     def fit(self,sample):
         start_time = time.time()
         self.data = self._process_data(sample)
@@ -530,11 +675,11 @@ class SkewLaplaceMix(BaseMixture):
             print("Mixtures of Skew-Laplace Fitting Done Successfully")
         end_time = time.time()
         self.execution_time=end_time-start_time
-    
-    
-    
-    
-    
+
+
+
+
+
     def get_params(self):
         #print("The estimated pi values are ", self.pi_new)
         #print("The estimated alpha values are ", self.alpha_new)
@@ -558,10 +703,9 @@ class SkewLaplaceMix(BaseMixture):
 
     def n_iter(self):
         return len(self.log_likelihoods)
-    
+
     def get_info_mat(self):
-        
+
         IM, SE = compute_empirical_info_and_se(self)
-        
+
         return IM, SE
-        

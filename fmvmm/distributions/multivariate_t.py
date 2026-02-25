@@ -1,6 +1,6 @@
 """
 Most of the codes are used from git repository mvem. Huge thanks to the
-devoloper. 
+devoloper.
 
 """
 
@@ -79,7 +79,7 @@ def loglike(x, loc, shape, df, allow_singular=True):
 
 def total_params(loc, shape, df):
     p = len(loc)
-    
+
     return 1 + p + (p*(p+1)/2)
 
 def rvs(loc, shape, df, size=1, random_state=None):
@@ -220,7 +220,7 @@ def fit(X, maxiter = 100, ptol = 1e-6, ftol = 1e-8, return_loglike = False):
     return mu, sigma, nu
 
 def info_mat(X,mu,sigma,nu):
-    
+
     p =len(mu)
     g = 1
     if isinstance(nu, np.ndarray):
@@ -228,12 +228,29 @@ def info_mat(X,mu,sigma,nu):
     IM = info_matrix_t(
     X, [1], [mu], [sigma], nu,
     d_mixedmvST_func=d_mixedmvST,
-    dmvt_ls_func=dmvt_ls,   
+    dmvt_ls_func=dmvt_ls,
     g=g, p=p)
-    
+
     final_IM = expand_reduced_IM_to_full_no_pi(IM, p, g)
-    
+
     return final_IM
+
+def score_mat(X,mu,sigma,nu):
+
+    p =len(mu)
+    g = 1
+    if isinstance(nu, np.ndarray):
+        nu = nu[0]
+    _, S = info_matrix_t(
+    X, [1], [mu], [sigma], nu,
+    d_mixedmvST_func=d_mixedmvST,
+    dmvt_ls_func=dmvt_ls,
+    g=g, p=p, return_scores= True)
+
+    # final_IM = expand_reduced_IM_to_full_no_pi(IM, p, g)
+
+    return S
+
 
 def expand_reduced_IM_to_full_no_pi(IM_reduced, p, g):
     """

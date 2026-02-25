@@ -14,28 +14,28 @@ def pdf(x,mu, sigma, nu):
     return slashmix_smsn.dmvSS(x,mu, sigma, np.zeros(p), nu)
 
 def loglike(x,mu, sigma, nu):
-    
+
     return np.sum(logpdf(x, mu, sigma, nu))
 
 def total_params(mu, sigma, nu):
     p = len(mu)
-    
+
     return p + (p*(p+1)/2) +1
 
 def rvs(mu, sigma, nu, size = 1):
     p = len(mu)
-    
+
     return gen_SS_multi(size, mu, sigma, np.zeros(p), nu)
 
 def fit(x):
     model = slashmix_smsn.SlashMix(1, verbose = False)
     model.fit(x)
     _, alphas = model.get_params()
-    
+
     return alphas[0][0], alphas[0][1], np.array([alphas[0][3]])
 
 def info_mat(X,mu,sigma,nu):
-    
+
     p =len(mu)
     g = 1
     if isinstance(nu, np.ndarray):
@@ -46,10 +46,27 @@ def info_mat(X,mu,sigma,nu):
     dmvSS_func=dmvSS,
     g=g, p=p
 )
-    
+
     final_IM = expand_reduced_IM_to_full_no_pi_slash_from_skewslash(IM, p, g)
-    
+
     return final_IM
+
+def score_mat(X,mu,sigma,nu):
+
+    p =len(mu)
+    g = 1
+    if isinstance(nu, np.ndarray):
+        nu = nu[0]
+    _, S = info_matrix_skewslash(
+    X, [1], [mu], [sigma], [np.zeros(p)], nu,
+    d_mixedmvSS_func=d_mixedmvSS,
+    dmvSS_func=dmvSS,
+    g=g, p=p, return_scores= True
+)
+    
+    # final_IM = expand_reduced_IM_to_full_no_pi_slash_from_skewslash(IM, p, g)
+
+    return S
 
 import numpy as np
 
@@ -196,4 +213,3 @@ def expand_reduced_IM_to_full_no_pi_slash_from_skewslash(IM_reduced, p, g):
     # multiply
     IM_full_no_pi_slash = D @ IM_no_shape_no_pi @ D.T
     return IM_full_no_pi_slash
-

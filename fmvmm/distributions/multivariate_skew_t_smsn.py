@@ -5,35 +5,35 @@ from fmvmm.mixsmsn.gen import gen_ST_multi
 from fmvmm.mixsmsn.information_matrix_smsn import info_matrix_skewt
 
 def logpdf(x,mu, sigma, lmbda, nu):
-    
+
     return np.log(dmvt_ls(x,mu, sigma, lmbda, nu))
 
 def pdf(x,mu, sigma, lmbda, nu):
-    
+
     return dmvt_ls(x,mu, sigma, lmbda, nu)
 
 def loglike(x,mu, sigma, lmbda, nu):
-    
+
     return np.sum(logpdf(x, mu, sigma, lmbda, nu))
 
 def total_params(mu, sigma, lmbda, nu):
     p = len(mu)
-    
+
     return 2*p + (p*(p+1)/2) +1
 
 def rvs(mu, sigma, lmbda, nu, size = 1):
-    
+
     return gen_ST_multi(size, mu, sigma, lmbda, nu)
 
 def fit(x):
     model = skewtmix_smsn.SkewTMix(1, verbose = False)
     model.fit(x)
     _, alphas = model.get_params()
-    
+
     return alphas[0][0], alphas[0][1], alphas[0][2], np.array([alphas[0][3]])
 
 def info_mat(X,mu,sigma,lmbda,nu):
-    
+
     p =len(mu)
     g = 1
     if isinstance(nu, np.ndarray):
@@ -41,13 +41,29 @@ def info_mat(X,mu,sigma,lmbda,nu):
     IM = info_matrix_skewt(
     X,[1], [mu], [sigma], [lmbda], nu,
     d_mixedmvST_func=d_mixedmvST,
-    dmvt_ls_func=dmvt_ls,   
+    dmvt_ls_func=dmvt_ls,
     g=g, p=p)
-    
+
     final_IM = expand_reduced_IM_to_full_no_pi(IM, p, g)
-    
+
     return final_IM
-    
+
+def score_mat(X,mu,sigma,lmbda,nu):
+
+    p =len(mu)
+    g = 1
+    if isinstance(nu, np.ndarray):
+        nu = nu[0]
+    _, S = info_matrix_skewt(
+    X,[1], [mu], [sigma], [lmbda], nu,
+    d_mixedmvST_func=d_mixedmvST,
+    dmvt_ls_func=dmvt_ls,
+    g=g, p=p, return_scores= True)
+
+    # final_IM = expand_reduced_IM_to_full_no_pi(IM, p, g)
+
+    return S
+
 
 def expand_reduced_IM_to_full_no_pi(IM_reduced, p, g):
     """
@@ -174,5 +190,3 @@ def expand_reduced_IM_to_full_no_pi(IM_reduced, p, g):
     # 4) Multiply to get final result
     IM_full_no_pi = D_no_pi @ IM_reduced_no_pi @ D_no_pi.T
     return IM_full_no_pi
-
-    

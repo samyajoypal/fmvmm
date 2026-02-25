@@ -80,6 +80,9 @@ class BaseMixture(metaclass=ABCMeta):
                 self.log_likelihoods.append(log_likelihood_old)
             gamma_temp_ar=np.exp(log_gamma_temp)
             pi_new,alpha_new=self._m_step(gamma_temp_ar, X, estimate_alphas_function,dist_comb, **kwargs)
+            post_m_step = kwargs.get("post_m_step", None)
+            if post_m_step is not None:
+                pi_new, alpha_new = post_m_step(pi_new, alpha_new)
             log_likelihood_new, log_gamma_new = self._e_step(
                 X, alpha_new, pi_new,dist_comb)
             self.log_likelihoods.append(log_likelihood_new)
