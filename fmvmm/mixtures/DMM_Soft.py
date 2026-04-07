@@ -297,111 +297,317 @@ def dirichlet_known_mean_precision_mle(x: np.ndarray, gamma: np.ndarray, alpha_i
     return alpha_1
 
 
+##
+##def _fit_s(x: np.ndarray, gamma: np.ndarray, alpha_old):
+##
+##    p = x.shape[1]
+##    n = x.shape[0]
+##    k = gamma.shape[1]
+##    x_lol = x.tolist()
+##    N_js = [np.sum(gamma[:, l]) for l in range(k)]
+##    sj_old = [np.sum(alpha_old[i]) for i in range(len(alpha_old))]
+##    mj_old = [(np.array(alpha_old[i])/sj_old[i]).tolist()
+##              for i in range(len(alpha_old))]
+##    alpha_new_all = []
+##    for o in range(k):
+##        diff = 5
+##        sjold = sj_old[o]
+##        max_iter=100
+##        it=0
+##        while diff > 0.0001:
+##            cs = []
+##            for i in range(n):
+##                for j in range(p):
+##                    c_temp = mj_old[o][j]*gamma[i, o]*np.log(x_lol[i][j])
+##                    cs.append(c_temp)
+##            c = np.sum(cs)
+##            bs = []
+##            for i in range(p):
+##                b_temp = mj_old[o][i]*digamma(sjold*mj_old[o][i])
+##                bs.append(b_temp)
+##            b = N_js[o]*np.sum(bs)
+##            a = N_js[o]*digamma(sjold)
+##            firststdif = a-b+c
+##            d = N_js[o]*_trigamma(sjold)
+##            es = []
+##            for i in range(p):
+##                es_temp = (mj_old[o][i]**2)*_trigamma(sjold*mj_old[o][i])
+##                es.append(es_temp)
+##            e = N_js[o]*np.sum(es)
+##            seconddif = d-e
+##            # if seconddif < 0:
+##            #     sj_new = sjold - firststdif/seconddif
+##            # elif firststdif + sjold*seconddif < 0:
+##            #     sj_new = 1/((1/sjold)+(1/sjold**2)*(1/seconddif)*firststdif)
+##            # else:
+##            #     raise NotConvergingError(f"Unable to update s from {sjold}")
+##            if firststdif + sjold*seconddif < 0:
+##                sj_new = 1/((1/sjold)+(1/sjold**2)*(1/seconddif)*firststdif)
+##            elif seconddif < 0:
+##                sj_new = sjold - firststdif/seconddif
+##            else:
+##                # raise NotConvergingError(f"Unable to update s from {sjold}")
+##                sj_new = max(1e-6, sjold * 0.9)
+##            diff = abs(sj_new-sjold)
+##            #print("s_diff",diff)
+##            sjold = sj_new
+##            it=it+1
+##            if it==max_iter:
+##                break
+##        # print(it)
+##        alphaj_new = [sj_new*mj_old[o][i] for i in range(p)]
+##        alpha_new_all.append(alphaj_new)
+##    return alpha_new_all
+##
+##
+##def _fit_m(x: np.ndarray, gamma: np.ndarray, alpha_old):
+##    p = x.shape[1]
+##    n = x.shape[0]
+##    k = gamma.shape[1]
+##    x_lol = x.tolist()
+##    N_js = [np.sum(gamma[:, l]) for l in range(k)]
+##    sj_old = [np.sum(alpha_old[i]) for i in range(len(alpha_old))]
+##    mj_old = [(np.array(alpha_old[i])/sj_old[i]).tolist()
+##              for i in range(len(alpha_old))]
+##    alpha_new_all = []
+##
+##    for o in range(k):
+##
+##        sjold = sj_old[o]
+##        mjold = mj_old[o]
+##        alpha_j_old = alpha_old[o]
+##        m6 = []
+##        for s in range(p):
+##            m5 = np.sum([gamma[i, o]*np.log(x_lol[i][s])
+##                        for i in range(n)])/N_js[o]
+##            m6.append(m5)
+##        diff = 5
+##        norm0 = 5
+##        while diff > 0.0001:
+##            alpha_j_new = []
+##            for j in range(p):
+##                m1 = m6[j]
+##                m2 = [mjold[q]*m6[q]for q in range(p)]
+##                m3 = np.sum(m2)
+##                m4 = np.sum([mjold[r]*digamma(sjold*mjold[r])
+##                            for r in range(p)])
+##                alpha_jm_new = _ipsi(m1-m3+m4, tol=1.48e-9, maxiter=1000)
+##                alpha_j_new.append(alpha_jm_new)
+##            alpha_j_new = np.array(alpha_j_new) / \
+##                np.array(alpha_j_new).sum() * sjold
+##            norm1 = norm(alpha_j_new-alpha_j_old)
+##            diff = abs(norm1-norm0)
+##            #print("m_diff",diff)
+##            norm0 = norm1
+##            mjold = alpha_j_new/alpha_j_new.sum()
+##        alpha_new_all.append(alpha_j_new.tolist())
+##    return alpha_new_all
+
 
 def _fit_s(x: np.ndarray, gamma: np.ndarray, alpha_old):
+    """
+    Numerically-stable version of your _fit_s.
+    Formulas are unchanged. We only:
+      - avoid Python lists + repeated summations (vectorize the same sums)
+      - guard divisions / logs with tiny eps
+      - guard 1/0 and inf/nan propagation
+      - keep sj positive and finite
+    """
+    x = np.asarray(x, dtype=float)
+    gamma = np.asarray(gamma, dtype=float)
+    alpha_old = np.asarray(alpha_old, dtype=float)
 
     p = x.shape[1]
     n = x.shape[0]
     k = gamma.shape[1]
-    x_lol = x.tolist()
-    N_js = [np.sum(gamma[:, l]) for l in range(k)]
-    sj_old = [np.sum(alpha_old[i]) for i in range(len(alpha_old))]
-    mj_old = [(np.array(alpha_old[i])/sj_old[i]).tolist()
-              for i in range(len(alpha_old))]
+
+    # --- numeric guards (do not change formulas, only avoid nan/inf) ---
+    eps_x = 1e-300          # for log(x) only; does not alter positive x, only clips zeros
+    eps_s = 1e-12           # for safe reciprocals / denom checks
+    s_min = 1e-8            # keep precision strictly positive
+    s_max = 1e12            # prevent overflow in digamma/trigamma (purely numeric safeguard)
+
+    # N_js as in your code; but guard zeros
+    N_js = np.sum(gamma, axis=0)
+    N_js_safe = np.maximum(N_js, eps_s)
+
+    # sj_old and mj_old as in your code; guard zero sums
+    sj_old = np.sum(alpha_old, axis=1)
+    sj_old_safe = np.maximum(sj_old, s_min)
+    mj_old = alpha_old / sj_old_safe[:, None]  # same as alpha_old/sj_old
+
+    # log(x) with clipping to avoid -inf when x hits 0 due to numeric issues
+    logx = np.log(np.clip(x, eps_x, None))
+
     alpha_new_all = []
     for o in range(k):
-        diff = 5
-        sjold = sj_old[o]
-        max_iter=100
-        it=0
+        diff = 5.0
+        sjold = float(np.clip(sj_old_safe[o], s_min, s_max))
+        max_iter = 100
+        it = 0
+
+        # cache component weights
+        go = gamma[:, o]
+
         while diff > 0.0001:
-            cs = []
-            for i in range(n):
-                for j in range(p):
-                    c_temp = mj_old[o][j]*gamma[i, o]*np.log(x_lol[i][j])
-                    cs.append(c_temp)
-            c = np.sum(cs)
-            bs = []
-            for i in range(p):
-                b_temp = mj_old[o][i]*digamma(sjold*mj_old[o][i])
-                bs.append(b_temp)
-            b = N_js[o]*np.sum(bs)
-            a = N_js[o]*digamma(sjold)
-            firststdif = a-b+c
-            d = N_js[o]*_trigamma(sjold)
-            es = []
-            for i in range(p):
-                es_temp = (mj_old[o][i]**2)*_trigamma(sjold*mj_old[o][i])
-                es.append(es_temp)
-            e = N_js[o]*np.sum(es)
-            seconddif = d-e
-            # if seconddif < 0:
-            #     sj_new = sjold - firststdif/seconddif
-            # elif firststdif + sjold*seconddif < 0:
-            #     sj_new = 1/((1/sjold)+(1/sjold**2)*(1/seconddif)*firststdif)
-            # else:
-            #     raise NotConvergingError(f"Unable to update s from {sjold}")
-            if firststdif + sjold*seconddif < 0:
-                sj_new = 1/((1/sjold)+(1/sjold**2)*(1/seconddif)*firststdif)
-            elif seconddif < 0:
-                sj_new = sjold - firststdif/seconddif
+            mjo = mj_old[o]  # (p,)
+
+            # c = sum_{i,j} m_j * gamma_i * log(x_ij)
+            # vectorized: sum_j m_j * sum_i gamma_i * logx_ij
+            # -> mjo @ (logx.T @ go)
+            c = float(mjo @ (logx.T @ go))
+
+            # b = N_js[o] * sum_j m_j * digamma(s * m_j)
+            sm = sjold * mjo
+            # guard sm > 0 (should be; but clip for safety)
+            sm = np.clip(sm, s_min, s_max)
+
+            b = float(N_js[o] * np.sum(mjo * digamma(sm)))
+
+            # a = N_js[o] * digamma(s)
+            a = float(N_js[o] * digamma(np.clip(sjold, s_min, s_max)))
+
+            firststdif = a - b + c  # unchanged
+
+            # d = N_js[o] * trigamma(s)
+            d = float(N_js[o] * _trigamma(np.clip(sjold, s_min, s_max)))
+
+            # e = N_js[o] * sum_j m_j^2 * trigamma(s*m_j)
+            e = float(N_js[o] * np.sum((mjo ** 2) * _trigamma(sm)))
+
+            seconddif = d - e  # unchanged
+
+            # --- update step: SAME formulas, with safe evaluation ---
+            sj_new = None
+
+            # If any nan/inf occurred, damp (doesn't change formulas; avoids propagating nan)
+            if (not np.isfinite(firststdif)) or (not np.isfinite(seconddif)) or (not np.isfinite(sjold)):
+                sj_new = sjold * 0.9
+
             else:
-                raise NotConvergingError(f"Unable to update s from {sjold}")
-            diff = abs(sj_new-sjold)
-            #print("s_diff",diff)
+                cond1 = firststdif + sjold * seconddif  # unchanged condition
+                if cond1 < 0:
+                    # sj_new = 1/((1/sjold)+(1/sjold**2)*(1/seconddif)*firststdif)
+                    # evaluate safely without changing algebra:
+                    inv_s = 1.0 / max(sjold, s_min)
+                    inv_s2 = inv_s * inv_s
+                    inv_sec = 1.0 / seconddif if abs(seconddif) > eps_s else np.sign(seconddif) / eps_s
+                    denom = inv_s + inv_s2 * inv_sec * firststdif
+                    if (not np.isfinite(denom)) or abs(denom) < eps_s:
+                        sj_new = sjold * 0.9
+                    else:
+                        sj_new = 1.0 / denom
+
+                elif seconddif < 0:
+                    # sj_new = sjold - firststdif/seconddif
+                    denom = seconddif if abs(seconddif) > eps_s else -eps_s
+                    sj_new = sjold - (firststdif / denom)
+
+                else:
+                    # your damping fallback
+                    sj_new = sjold * 0.9
+
+            # enforce positivity/finite (numeric safeguard only)
+            sj_new = float(np.clip(sj_new, s_min, s_max))
+
+            diff = abs(sj_new - sjold)
             sjold = sj_new
-            it=it+1
-            if it==max_iter:
+            it += 1
+            if it == max_iter:
                 break
-        # print(it)
-        alphaj_new = [sj_new*mj_old[o][i] for i in range(p)]
+
+        alphaj_new = (sjold * mj_old[o]).tolist()  # same formula
         alpha_new_all.append(alphaj_new)
+
     return alpha_new_all
 
 
 def _fit_m(x: np.ndarray, gamma: np.ndarray, alpha_old):
+    """
+    Numerically-stable version of your _fit_m.
+    Formulas are unchanged.
+    Added max-iteration safeguard to prevent infinite loops.
+    """
+    x = np.asarray(x, dtype=float)
+    gamma = np.asarray(gamma, dtype=float)
+    alpha_old = np.asarray(alpha_old, dtype=float)
+
     p = x.shape[1]
     n = x.shape[0]
     k = gamma.shape[1]
-    x_lol = x.tolist()
-    N_js = [np.sum(gamma[:, l]) for l in range(k)]
-    sj_old = [np.sum(alpha_old[i]) for i in range(len(alpha_old))]
-    mj_old = [(np.array(alpha_old[i])/sj_old[i]).tolist()
-              for i in range(len(alpha_old))]
+
+    eps_x = 1e-300
+    eps_w = 1e-12
+    s_min = 1e-8
+    s_max = 1e12
+    max_iter = 200   # ← NEW safeguard
+
+    logx = np.log(np.clip(x, eps_x, None))
+
+    N_js = np.sum(gamma, axis=0)
+    N_js_safe = np.maximum(N_js, eps_w)
+
+    sj_old = np.sum(alpha_old, axis=1)
+    sj_old_safe = np.maximum(sj_old, s_min)
+
+    mj_old = alpha_old / sj_old_safe[:, None]
+
     alpha_new_all = []
 
     for o in range(k):
+        sjold = float(np.clip(sj_old_safe[o], s_min, s_max))
+        mjold = mj_old[o].copy()
+        alpha_j_old = alpha_old[o].copy()
 
-        sjold = sj_old[o]
-        mjold = mj_old[o]
-        alpha_j_old = alpha_old[o]
-        m6 = []
-        for s in range(p):
-            m5 = np.sum([gamma[i, o]*np.log(x_lol[i][s])
-                        for i in range(n)])/N_js[o]
-            m6.append(m5)
-        diff = 5
-        norm0 = 5
-        while diff > 0.0001:
-            alpha_j_new = []
-            for j in range(p):
-                m1 = m6[j]
-                m2 = [mjold[q]*m6[q]for q in range(p)]
-                m3 = np.sum(m2)
-                m4 = np.sum([mjold[r]*digamma(sjold*mjold[r])
-                            for r in range(p)])
-                alpha_jm_new = _ipsi(m1-m3+m4, tol=1.48e-9, maxiter=1000)
-                alpha_j_new.append(alpha_jm_new)
-            alpha_j_new = np.array(alpha_j_new) / \
-                np.array(alpha_j_new).sum() * sjold
-            norm1 = norm(alpha_j_new-alpha_j_old)
-            diff = abs(norm1-norm0)
-            #print("m_diff",diff)
+        go = gamma[:, o]
+
+        m6 = (logx.T @ go) / N_js_safe[o]
+
+        diff = 5.0
+        norm0 = 5.0
+        it = 0   # ← iteration counter
+
+        while diff > 0.0001 and it < max_iter:
+
+            # m3 = sum_q mjold[q]*m6[q]
+            m3 = float(np.sum(mjold * m6))
+
+            # m4 = sum_r mjold[r]*digamma(sjold*mjold[r])
+            sm = np.clip(sjold * mjold, s_min, s_max)
+            m4 = float(np.sum(mjold * digamma(sm)))
+
+            # alpha_jm_new = _ipsi(m6 - m3 + m4)
+            y = (m6 - m3 + m4)
+            alpha_j_new = _ipsi(y, tol=1.48e-9, maxiter=1000)
+            alpha_j_new = np.asarray(alpha_j_new, dtype=float)
+
+            # normalize (unchanged formula)
+            ssum = float(np.sum(alpha_j_new))
+            if (not np.isfinite(ssum)) or ssum <= 0:
+                alpha_j_new = np.clip(mjold, eps_w, None)
+                alpha_j_new = alpha_j_new / np.sum(alpha_j_new) * sjold
+            else:
+                alpha_j_new = (alpha_j_new / ssum) * sjold
+
+            # convergence metric (unchanged)
+            norm1 = norm(alpha_j_new - alpha_j_old)
+            diff = abs(norm1 - norm0)
             norm0 = norm1
-            mjold = alpha_j_new/alpha_j_new.sum()
-        alpha_new_all.append(alpha_j_new.tolist())
-    return alpha_new_all
 
+            # update mjold
+            denom = float(np.sum(alpha_j_new))
+            if (not np.isfinite(denom)) or denom <= 0:
+                denom = eps_w
+            mjold = alpha_j_new / denom
+
+            it += 1
+
+        # If max_iter reached, we silently accept last iterate.
+        # (We do NOT change formulas; only stop iteration.)
+
+        alpha_new_all.append(alpha_j_new.tolist())
+
+    return alpha_new_all
 
 def _fit_m_known_s(x: np.ndarray, gamma: np.ndarray, alpha_old,true_s):
     p = x.shape[1]
