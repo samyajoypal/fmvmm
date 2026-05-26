@@ -7,6 +7,14 @@ from fmvmm.utils.utils_mixture import (mixture_clusters)
 from fmvmm.distributions.multivariate_genhyperbolic import logpdf as logpdfmgh
 from scipy.optimize import approx_fprime
 
+
+def _as_scalar(value):
+    arr = np.asarray(value)
+    if arr.size != 1:
+        raise ValueError("Expected a scalar parameter.")
+    return float(arr.reshape(-1)[0])
+
+
 def full_neg_loglike(theta, data, K, p):
     """
     Negative log-likelihood of the entire GH mixture model, 
@@ -311,13 +319,13 @@ def extract_cluster_params(mixture_dict):
         if i in mixture_dict:
             cluster = mixture_dict[i]
             # Extract parameters in the required order
-            cpl1 = cluster["cpl"][1]
-            cpl0 = cluster["cpl"][0]
+            cpl1 = _as_scalar(cluster["cpl"][1])
+            cpl0 = _as_scalar(cluster["cpl"][0])
             mu = cluster["mu"].tolist()
             sigma = cluster["sigma"]
             alpha = cluster["alpha"].tolist()
             chi, psi = _alphabar2chipsi(cpl0, cpl1)
-            result.append([cpl1[0], chi,psi, mu, sigma, alpha])
+            result.append([cpl1, chi, psi, mu, sigma, alpha])
     
     return result
 

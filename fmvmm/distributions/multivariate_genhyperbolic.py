@@ -333,11 +333,21 @@ def var(lmbda, chi, psi, mu, sigma, gamma):
 #         #chi = alpha_bar**2 / psi
 #     return chi, psi
 
+def _as_scalar_param(value, name):
+    arr = np.asarray(value)
+    if arr.size != 1:
+        raise ValueError(f"Parameter '{name}' must be scalar.")
+    return float(arr.reshape(-1)[0])
+
+
 def _alphabar2chipsi(alpha_bar, lmbda, eps=1e-15):
     """
     Translate (alpha_bar, lambda) -> (chi, psi) as in R's .abar2chipsi(),
     with clamping to avoid Inf/NaN if the ratio overflows.
     """
+    alpha_bar = _as_scalar_param(alpha_bar, "alpha_bar")
+    lmbda = _as_scalar_param(lmbda, "lmbda")
+
     if alpha_bar < 0:
         raise ValueError("alpha_bar must be non-negative.")
 
@@ -613,7 +623,7 @@ def fitghypmv(
 
             tmp_fit = scipy.optimize.minimize(vg_optfunc, x0, args=(eta_sum, xi_sum, n), method='L-BFGS-B') #method='L-BFGS-B',np.log(lmbda)+2
 
-            lmbda = np.exp(tmp_fit["x"])
+            lmbda = _as_scalar_param(np.exp(tmp_fit["x"]), "lmbda")
 
 
         elif alpha_bar==0 and lmbda<0 and not opt_pars["alpha_bar"] and opt_pars["lmbda"]:
@@ -623,7 +633,7 @@ def fitghypmv(
             x0= custom_log(-1 - lmbda) #np.log(lmbda) np.random.rand()
             tmp_fit = scipy.optimize.minimize(t_optfunc, x0, args=(delta_sum, xi_sum, n), method='L-BFGS-B') #custom_log(-1 - lmbda)+10
 
-            lmbda = (-1 - np.exp(tmp_fit["x"]))
+            lmbda = _as_scalar_param((-1 - np.exp(tmp_fit["x"])), "lmbda")
 
 
 
@@ -647,8 +657,9 @@ def fitghypmv(
             par = np.concatenate([tmp_fit["x"], mix_pars_fixed_v])
 
 
-            lmbda = par[pars_order == "lmbda"]
-            alpha_bar = np.exp(par[pars_order == "alpha_bar"])
+            lmbda = _as_scalar_param(par[pars_order == "lmbda"], "lmbda")
+            alpha_bar = _as_scalar_param(
+                np.exp(par[pars_order == "alpha_bar"]), "alpha_bar")
             if np.isneginf(lmbda):
                 lmbda=-50
             if np.isposinf(lmbda):

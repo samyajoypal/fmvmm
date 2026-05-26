@@ -9,6 +9,21 @@ from scipy.linalg import pinv, det
 from scipy.special import kv  # 'kv' is the modified Bessel function of the second kind
 from copy import deepcopy
 
+
+def _as_scalar(value, name):
+    arr = np.asarray(value)
+    if arr.size != 1:
+        raise ValueError(f"Parameter '{name}' must be scalar.")
+    return float(arr.reshape(-1)[0])
+
+
+def _cpl_values(par):
+    cpl = par.get('cpl', [1e-10, -0.5])
+    omega = max(_as_scalar(cpl[0], "omega"), 1e-10)
+    lam = _as_scalar(cpl[1], "lambda")
+    return omega, lam
+
+
 # --------------------------------------------------------------------
 # 1) HELPER / PLACEHOLDER FUNCTIONS (to be implemented or replaced)
 # --------------------------------------------------------------------
@@ -775,11 +790,7 @@ def ddghypGH(x, par, log=False, invS=None):
     mu = np.asarray(mu).ravel()        # shape (p,)
     alpha = np.asarray(alpha).ravel()  # shape (p,)
     
-    omega_value = max(par.get('cpl', [1e-10])[0], 1e-10)  # Ensure a positive value
-    omega = math.exp(math.log(omega_value))
-
-    # omega = math.exp(math.log(par['cpl'][0]))  # = par$cpl[1] in R, but they did exp(log(...))
-    lam   = par['cpl'][1]  # lambda
+    omega, lam = _cpl_values(par)
     
     if invS is None:
         invS = pinv(sigma)  # pseudo-inverse if needed
@@ -884,10 +895,7 @@ def gig2GH(x, par, invS=None):
     
     # par$cpl[1] = "omega" in exponent form
     # omega = math.exp(math.log(par['cpl'][0]))
-    omega_value = max(par.get('cpl', [1e-10])[0], 1e-10)  # Ensure a positive value
-    omega = math.exp(math.log(omega_value))
-    # lambda = par$cpl[2]
-    lam = par['cpl'][1]
+    omega, lam = _cpl_values(par)
     
     # a1 = omega + alpha' invS alpha
     alpha_invSa = alpha @ invS @ alpha
@@ -1204,8 +1212,7 @@ def updatemaScpl(x, par, weights=None, invS=None, alpha_known=None, v=None):
     
     # par.old = c( log(par$cpl[1]) , par$cpl[2] )
     # We do the same:
-    cpl1 = par['cpl'][0]  # in R, cpl[1], then we do log(cpl[1])
-    cpl2 = par['cpl'][1]  # in R, cpl[2]
+    cpl1, cpl2 = _cpl_values(par)
     # try:
     #     cpl1 = np.maximum(cpl1[0],1)
     # except:
@@ -1275,7 +1282,7 @@ def updatemaScpl(x, par, weights=None, invS=None, alpha_known=None, v=None):
     
     
     a_ = updateol(par_old, ABC=ABC, n=2)
-    cpl_new = [a_[0], a_[1]]
+    cpl_new = [_as_scalar(a_[0], "omega"), _as_scalar(a_[1], "lambda")]
     
     new_par = {
         'mu': mu_new,
