@@ -215,7 +215,7 @@ def expect(lmbda, chi, psi, func = "x"):
     lmbda = np.asarray(lmbda)
     chi = np.asarray(chi)
     psi = np.asarray(psi)
-
+#test xdxdxd
     #for i in range(len(lmbda)):
     #    _check_gig_pars(lmbda[i], chi[i], psi[i])
 
