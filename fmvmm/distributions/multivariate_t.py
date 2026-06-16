@@ -75,7 +75,7 @@ def loglike(x, loc, shape, df, allow_singular=True):
     :return: The log-likelihood for given all observations and parameters.
     :rtype: float
     """
-    return np.sum(logpdf(x, loc, shape, df, allow_singular))
+    return np.sum(logpdf(x, loc, shape, df)) #changed: allow_singular removed - logpdf doesn't take this paramet 
 
 def total_params(loc, shape, df):
     p = len(loc)
@@ -137,7 +137,7 @@ def var(loc, shape, df):
     :rtype: np.ndarray with shape (p,).
     """
     assert df > 2, "variance of mv student's t is not defined for df <= 2"
-    return (df / (df - 2)) * shape
+    return (df / (df - 2)) * np.array(shape) # changed: converted shape to np.array - otherwise error when multiplying by float
 
 def fit(X, maxiter = 100, ptol = 1e-6, ftol = 1e-8, return_loglike = False):
     """
@@ -149,7 +149,7 @@ def fit(X, maxiter = 100, ptol = 1e-6, ftol = 1e-8, return_loglike = False):
     :type X: np.ndarray
     :param maxiter: The maximum number of iterations to use in the EM algorithm.
         Defaults to 100.
-    :type nit: int, optional
+s    :type nit: int, optional
     :param ptol: The relative convergence criterion for the estimated
         parameters. Defaults to 1e-6.
     :type ptol: float, optional

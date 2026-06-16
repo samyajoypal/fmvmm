@@ -264,7 +264,7 @@ def mean(lmbda, chi, psi, mu, sigma, gamma):
             alpha = np.sqrt(chi*psi)
             EW = np.sqrt(chi/psi) * kv(lmbda+1, alpha) / kv(lmbda, alpha)
 
-    return mu + EW*gamma
+    return np.array(mu) + EW * np.array(gamma)   # changed: mu/gamma to np.array - float * list error
 
 def var(lmbda, chi, psi, mu, sigma, gamma):
     """
@@ -305,7 +305,7 @@ def var(lmbda, chi, psi, mu, sigma, gamma):
             EW2 = (chi/psi) * kv(lmbda+2, alpha) / kv(lmbda, alpha)
             VarW = EW2 - EW**2
 
-    return VarW * np.outer(gamma, gamma) + EW * sigma
+    return VarW * np.outer(gamma, gamma) + EW * np.array(sigma)   # changed: sigma to np.array - float * list error
 
 
 # def _alphabar2chipsi(alpha_bar, lmbda):
@@ -338,6 +338,8 @@ def _alphabar2chipsi(alpha_bar, lmbda, eps=1e-15):
     Translate (alpha_bar, lambda) -> (chi, psi) as in R's .abar2chipsi(),
     with clamping to avoid Inf/NaN if the ratio overflows.
     """
+    alpha_bar = float(np.ravel(alpha_bar)[0])   # changed: numpy 2.0 needs a scalar, not an array
+    lmbda = float(np.ravel(lmbda)[0])           # changed: same reason
     if alpha_bar < 0:
         raise ValueError("alpha_bar must be non-negative.")
 

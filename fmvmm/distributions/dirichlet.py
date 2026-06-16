@@ -25,9 +25,3 @@ def rvs(alpha, size = 1):
 def fit(x, method = "meanprecision"):
     
     return drm.mle(x, method = method)
-    
-
-x_te=np.array()
-alpha_te=[]
-
-logpdf(x_te,alpha_te)

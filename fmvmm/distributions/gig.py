@@ -215,7 +215,7 @@ def expect(lmbda, chi, psi, func = "x"):
     lmbda = np.asarray(lmbda)
     chi = np.asarray(chi)
     psi = np.asarray(psi)
-#test xdxdxd
+
     #for i in range(len(lmbda)):
     #    _check_gig_pars(lmbda[i], chi[i], psi[i])
 
@@ -323,9 +323,9 @@ def var(lmbda, chi, psi):
     :rtype: float
     """
 
-    lmbda = np.asarray(lmbda)
-    chi = np.asarray(chi)
-    psi = np.asarray(psi)
+    lmbda = np.atleast_1d(lmbda)   # changed: asarray -> atleast_1d - scalars have no len()
+    chi = np.atleast_1d(chi)
+    psi = np.atleast_1d(psi)
 
     for i in range(len(lmbda)):
         _check_gig_pars(lmbda[i], chi[i], psi[i])
