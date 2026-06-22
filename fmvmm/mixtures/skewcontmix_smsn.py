@@ -83,8 +83,8 @@ def dmvSNC(X, mu, Sigma, lam, nu):
     term1 = nu1 * dmvnorm_part1 * norm.cdf(A1)
     term2 = (1.0 - nu1) * dmvnorm_part2 * norm.cdf(A2)
 
-    dens = 2.0*(term1 + term2)
-    return dens
+    dens = np.real_if_close(2.0*(term1 + term2), tol=1000)
+    return np.asarray(np.real(dens), dtype=float)
 
 def d_mixedmvSNC(X, pi_list, mu_list, Sigma_list, lam_list, nu):
     """
@@ -98,7 +98,8 @@ def d_mixedmvSNC(X, pi_list, mu_list, Sigma_list, lam_list, nu):
     g = len(pi_list)
     total = np.zeros(X.shape[0])
     for j in range(g):
-        val_j = dmvSNC(X, mu_list[j], Sigma_list[j], lam_list[j], nu)
+        val_j = np.real_if_close(dmvSNC(X, mu_list[j], Sigma_list[j], lam_list[j], nu), tol=1000)
+        val_j = np.asarray(np.real(val_j), dtype=float)
         total += pi_list[j]*val_j
     return total
 

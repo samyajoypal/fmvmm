@@ -27,6 +27,26 @@ from scipy.special import logsumexp
 from fmvmm.mixtures._base import BaseMixture
 from fmvmm.utils.utils_dmm import hard_assignments, mixture_counts, mixture_proportions_info
 from fmvmm.mixtures.mixmgh import approx_hessian_scipy
+from fmvmm.mixtures.skewnormmix_smsn import (
+    estimate_alphas_skewnormal, dmvSN, d_mixedmvSN
+)
+from fmvmm.mixtures.skewtmix_smsn import estimate_alphas_skewt
+from fmvmm.mixtures.tmix_smsn import estimate_alphas_t
+from fmvmm.mixtures.skewcontmix_smsn import (
+    estimate_alphas_skewcn, dmvSNC, d_mixedmvSNC
+)
+from fmvmm.mixtures.skewslashmix_smsn import (
+    estimate_alphas_skewslash,
+    dmvSS as dmvSS_skewslash,
+    d_mixedmvSS as d_mixedmvSS_skewslash,
+)
+from fmvmm.mixtures.slashmix_smsn import (
+    estimate_alphas_slash,
+    dmvSS as dmvSS_slash,
+    d_mixedmvSS as d_mixedmvSS_slash,
+)
+from fmvmm.mixtures.skewlaplacemix import estimate_alphas_skewlaplace
+from fmvmm.mixsmsn.dens import dmvt_ls, d_mixedmvST
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -36,6 +56,219 @@ dist_map = {"mvsn": mvsn, "mghp": mghp, "mgst": mgst, "mvhb": mvhb,
 
 all_dist = ["mvsn", "mghp", "mgst", "mvhb", "mvn", "mnig", "mvt", "mvvg",
             "mvsl", "mvst", "msnc","mssl","msl"]
+
+soft_dist = ["mvsn", "mghp", "mgst", "mvhb", "mvn", "mnig", "mvt", "mvvg",
+             "mvsl", "mvst", "msnc", "mssl", "msl"]
+dist_name_by_module = {module: name for name, module in dist_map.items()}
+
+
+def _regularize_cov(cov, eps=1e-6):
+    cov = np.asarray(cov, dtype=float)
+    cov = 0.5 * (cov + cov.T)
+    try:
+        eigvals = np.linalg.eigvalsh(cov)
+        min_eig = np.min(eigvals)
+        if min_eig < eps:
+            cov = cov + (eps - min_eig) * np.eye(cov.shape[0])
+    except np.linalg.LinAlgError:
+        cov = cov + eps * np.eye(cov.shape[0])
+    return cov
+
+
+def _weighted_mvn_update(X, weights, alpha_prev):
+    weights = np.asarray(weights, dtype=float)
+    n_eff = np.sum(weights)
+    if n_eff <= 1e-12:
+        return alpha_prev
+
+    mu = np.sum(weights[:, None] * X, axis=0) / n_eff
+    diff = X - mu
+    cov = (diff.T @ (weights[:, None] * diff)) / n_eff
+    return mu, _regularize_cov(cov)
+
+
+def _as_scalar(value):
+    arr = np.asarray(value)
+    if arr.shape == ():
+        return float(arr)
+    return float(arr.reshape(-1)[0])
+
+
+def _gh_alpha_bar_from_chi_psi(chi, psi):
+    return float(np.sqrt(max(_as_scalar(chi) * _as_scalar(psi), 0.0)))
+
+
+def _soft_update_gh_family(dist_name, X, weights, alpha_prev, gh_mstep_kwargs):
+    if dist_name == "mghp":
+        lmbda, chi, psi, mu, sigma, gamma = alpha_prev
+        fit = mghp.fitghypmv(
+            X, weights=weights,
+            lmbda=_as_scalar(lmbda),
+            alpha_bar=_gh_alpha_bar_from_chi_psi(chi, psi),
+            mu=mu, sigma=sigma, gamma=gamma,
+            opt_pars={"lmbda": True, "alpha_bar": True,
+                      "mu": True, "sigma": True, "gamma": True},
+            **gh_mstep_kwargs,
+        )
+        if fit["alpha_bar"] != 0:
+            chi_new, psi_new = mghp._alphabar2chipsi(fit["alpha_bar"], fit["lmbda"])
+        elif fit["lmbda"] > 0:
+            chi_new, psi_new = 0, 2 * fit["lmbda"]
+        else:
+            chi_new, psi_new = -2 * (fit["lmbda"] + 1), 0
+        return fit["lmbda"], chi_new, psi_new, fit["mu"], fit["sigma"], fit["gamma"]
+
+    if dist_name == "mgst":
+        lmbda, chi, mu, sigma, gamma = alpha_prev
+        fit = mghp.fitghypmv(
+            X, weights=weights,
+            lmbda=_as_scalar(lmbda),
+            alpha_bar=0,
+            mu=mu, sigma=sigma, gamma=gamma,
+            opt_pars={"lmbda": True, "alpha_bar": False,
+                      "mu": True, "sigma": True, "gamma": True},
+            **gh_mstep_kwargs,
+        )
+        return fit["lmbda"], -2 * (fit["lmbda"] + 1), fit["mu"], fit["sigma"], fit["gamma"]
+
+    if dist_name == "mvhb":
+        chi, psi, mu, sigma, gamma = alpha_prev
+        fit = mghp.fitghypmv(
+            X, weights=weights,
+            lmbda=(X.shape[1] + 1) / 2.0,
+            alpha_bar=_gh_alpha_bar_from_chi_psi(chi, psi),
+            mu=mu, sigma=sigma, gamma=gamma,
+            opt_pars={"lmbda": False, "alpha_bar": True,
+                      "mu": True, "sigma": True, "gamma": True},
+            **gh_mstep_kwargs,
+        )
+        chi_new, psi_new = mghp._alphabar2chipsi(fit["alpha_bar"], fit["lmbda"])
+        return chi_new, psi_new, fit["mu"], fit["sigma"], fit["gamma"]
+
+    if dist_name == "mnig":
+        chi, psi, mu, sigma, gamma = alpha_prev
+        fit = mghp.fitghypmv(
+            X, weights=weights,
+            lmbda=-0.5,
+            alpha_bar=_gh_alpha_bar_from_chi_psi(chi, psi),
+            mu=mu, sigma=sigma, gamma=gamma,
+            opt_pars={"lmbda": False, "alpha_bar": True,
+                      "mu": True, "sigma": True, "gamma": True},
+            **gh_mstep_kwargs,
+        )
+        return fit["alpha_bar"], fit["alpha_bar"], fit["mu"], fit["sigma"], fit["gamma"]
+
+    if dist_name == "mvvg":
+        lmbda, psi, mu, sigma, gamma = alpha_prev
+        fit = mghp.fitghypmv(
+            X, weights=weights,
+            lmbda=_as_scalar(lmbda),
+            alpha_bar=0,
+            mu=mu, sigma=sigma, gamma=gamma,
+            opt_pars={"lmbda": True, "alpha_bar": False,
+                      "mu": True, "sigma": True, "gamma": True},
+            **gh_mstep_kwargs,
+        )
+        return fit["lmbda"], 2 * fit["lmbda"], fit["mu"], fit["sigma"], fit["gamma"]
+
+    raise NotImplementedError(f"GH-family soft M-step is not available for {dist_name}.")
+
+
+def _soft_update_one_component(dist_name, X, weights, alpha_prev, gh_mstep_kwargs=None):
+    gamma = np.asarray(weights, dtype=float).reshape(-1, 1)
+    if np.sum(gamma) <= 1e-12:
+        return alpha_prev
+
+    gh_mstep_kwargs = {} if gh_mstep_kwargs is None else gh_mstep_kwargs
+    pi_prev = np.array([1.0])
+    alpha_list = [alpha_prev]
+    p = X.shape[1]
+
+    if dist_name in {"mghp", "mgst", "mvhb", "mnig", "mvvg"}:
+        return _soft_update_gh_family(
+            dist_name, X, gamma[:, 0], alpha_prev, gh_mstep_kwargs
+        )
+
+    if dist_name == "mvn":
+        return _weighted_mvn_update(X, gamma[:, 0], alpha_prev)
+
+    if dist_name == "mvsn":
+        return estimate_alphas_skewnormal(
+            X, gamma, alpha_list, pi_prev,
+            dmvSN_func=dmvSN,
+            d_mixedmvSN_func=d_mixedmvSN,
+        )[0]
+
+    if dist_name == "mvst":
+        mu, sigma, lmbda, nu = alpha_prev
+        alpha_st = [(mu, sigma, lmbda, _as_scalar(nu))]
+        mu_new, sigma_new, lmbda_new, nu_new = estimate_alphas_skewt(
+            X, gamma, alpha_st, pi_prev
+        )[0]
+        return mu_new, sigma_new, lmbda_new, np.array([nu_new])
+
+    if dist_name == "msnc":
+        return estimate_alphas_skewcn(
+            X, gamma, alpha_list, pi_prev,
+            dmvSNC_func=dmvSNC,
+            d_mixedmvSNC_func=d_mixedmvSNC,
+        )[0]
+
+    if dist_name == "mssl":
+        mu, sigma, lmbda, nu = alpha_prev
+        alpha_list = [(mu, sigma, lmbda, _as_scalar(nu))]
+        mu_new, sigma_new, lmbda_new, nu_new = estimate_alphas_skewslash(
+            X, gamma, alpha_list, pi_prev,
+            dmvSS_func=dmvSS_skewslash,
+            d_mixedmvSS_func=d_mixedmvSS_skewslash,
+        )[0]
+        return mu_new, sigma_new, lmbda_new, np.array([nu_new])
+
+    if dist_name == "mvsl":
+        return estimate_alphas_skewlaplace(X, gamma, alpha_list)[0]
+
+    if dist_name == "mvt":
+        loc, shape, df = alpha_prev
+        alpha_t = [(loc, shape, np.zeros(p), _as_scalar(df))]
+        mu_new, sigma_new, _, nu_new = estimate_alphas_t(
+            X, gamma, alpha_t, pi_prev,
+            dmvt_ls_func=dmvt_ls,
+            d_mixedmvST_func=d_mixedmvST,
+        )[0]
+        return mu_new, sigma_new, np.array([nu_new])
+
+    if dist_name == "msl":
+        mu, sigma, nu = alpha_prev
+        alpha_slash = [(mu, sigma, np.zeros(p), _as_scalar(nu))]
+        mu_new, sigma_new, _, nu_new = estimate_alphas_slash(
+            X, gamma, alpha_slash, pi_prev,
+            dmvSS_func=dmvSS_slash,
+            d_mixedmvSS_func=d_mixedmvSS_slash,
+        )[0]
+        return mu_new, sigma_new, np.array([nu_new])
+
+    raise NotImplementedError(f"Soft M-step is not available for {dist_name}.")
+
+
+def fmm_estimate_alphas_soft(X, gamma_matrix, alpha_prev, soft_dist_comb=None, **kwargs):
+    if soft_dist_comb is None:
+        raise ValueError("soft_dist_comb must be provided for non-identical soft EM.")
+    gh_mstep_kwargs = kwargs.get("gh_mstep_kwargs", {})
+    alpha_new = []
+    for j, dist_module in enumerate(soft_dist_comb):
+        dist_name = dist_name_by_module.get(dist_module)
+        if dist_name not in soft_dist:
+            raise NotImplementedError(f"Soft M-step is not available for {dist_name}.")
+        try:
+            alpha_new.append(
+                _soft_update_one_component(
+                    dist_name, X, gamma_matrix[:, j], alpha_prev[j],
+                    gh_mstep_kwargs=gh_mstep_kwargs
+                )
+            )
+        except Exception:
+            alpha_new.append(alpha_prev[j])
+    return alpha_new
 
 def convert_to_numpy(tuples_list):
     """
@@ -253,6 +486,253 @@ def pi_info_constrained(pi, N, eps=1e-12):
     return I_eta, Cov_eta, Cov_pi
 
 
+def pi_jacobian_from_eta(pi, eps=1e-12):
+    """
+    Jacobian d pi / d eta for eta_j = log(pi_j / pi_k), j=1,...,k-1.
+    """
+    pi = np.asarray(pi, dtype=float)
+    k = pi.size
+    pi = np.clip(pi, eps, 1 - eps)
+    pi = pi / pi.sum()
+
+    J = np.zeros((k, k - 1))
+    for m in range(k - 1):
+        for j in range(k - 1):
+            J[j, m] = pi[j] * ((1.0 if j == m else 0.0) - pi[m])
+        J[k - 1, m] = -pi[k - 1] * pi[m]
+    return J
+
+
+def eta_score_matrix(tau, pi):
+    """
+    Per-observation scores for mixture logits eta_j = log(pi_j/pi_k).
+    """
+    tau = np.asarray(tau, dtype=float)
+    pi = np.asarray(pi, dtype=float)
+    k = pi.size
+    if tau.shape[1] != k:
+        raise ValueError("tau and pi have incompatible numbers of components.")
+    if k == 1:
+        return np.zeros((tau.shape[0], 0))
+    return tau[:, :k - 1] - pi[:k - 1]
+
+
+def safe_component_score_matrix(dist_module, X, params):
+    """
+    Component score matrix with numerical sanitation.
+
+    The returned scores are on the parameterization used by each distribution's
+    score_mat implementation, typically unconstrained Cholesky/log parameters
+    for GH/MVN and the package's existing SMSN score coordinates.
+    """
+    if not hasattr(dist_module, "score_mat") or not callable(getattr(dist_module, "score_mat")):
+        raise NotImplementedError(
+            f"{dist_module.__name__} does not provide score_mat; cannot compute FMVMM information."
+        )
+
+    S = dist_module.score_mat(X, *params)
+    S = np.real_if_close(S, tol=1000)
+    S = np.asarray(np.real(S), dtype=float)
+    if S.ndim != 2 or S.shape[0] != X.shape[0]:
+        raise ValueError(
+            f"{dist_module.__name__}.score_mat must return shape (n,d); got {S.shape}."
+        )
+
+    return np.nan_to_num(S, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def observed_score_matrix_fmvmm(X, pi, alpha, dist_comb, tau):
+    """
+    Full observed-data score matrix for a non-identical finite mixture.
+
+    Parameter order:
+      eta_1,...,eta_{k-1}, theta_1, ..., theta_k
+    where eta_j = log(pi_j/pi_k), and theta_j follows the score_mat
+    parameterization of component j.
+    """
+    X = np.asarray(X, dtype=float)
+    pi = np.asarray(pi, dtype=float)
+    tau = np.asarray(tau, dtype=float)
+    n = X.shape[0]
+    k = len(dist_comb)
+
+    if len(alpha) != k or pi.size != k or tau.shape != (n, k):
+        raise ValueError("Incompatible X, pi, alpha, dist_comb, and tau dimensions.")
+
+    eta_scores = eta_score_matrix(tau, pi)
+    component_scores = []
+    raw_component_scores = []
+    param_dims = []
+
+    for j, dist_module in enumerate(dist_comb):
+        S_j = safe_component_score_matrix(dist_module, X, alpha[j])
+        raw_component_scores.append(S_j)
+        component_scores.append(tau[:, j:j + 1] * S_j)
+        param_dims.append(S_j.shape[1])
+
+    if component_scores:
+        S_obs = np.hstack([eta_scores] + component_scores)
+    else:
+        S_obs = eta_scores
+
+    return S_obs, raw_component_scores, param_dims
+
+
+def louis_score_decomposition_fmvmm(X, pi, alpha, dist_comb, tau):
+    """
+    Louis decomposition using complete-data score outer products.
+
+    This computes, observation by observation,
+      I_observed(OPG) = E[S_c S_c' | x] - Var[S_c | x]
+                      = S_obs S_obs'
+    and returns all three summed matrices. It includes the membership-variance
+    cross-blocks that the old block-diagonal FMVMM implementation missed.
+    """
+    S_obs, raw_component_scores, param_dims = observed_score_matrix_fmvmm(
+        X, pi, alpha, dist_comb, tau
+    )
+    tau = np.asarray(tau, dtype=float)
+    pi = np.asarray(pi, dtype=float)
+    n, k = tau.shape
+    eta_dim = max(k - 1, 0)
+    total_dim = eta_dim + sum(param_dims)
+
+    offsets = []
+    cursor = eta_dim
+    for d in param_dims:
+        offsets.append(cursor)
+        cursor += d
+
+    complete_opg = np.zeros((total_dim, total_dim), dtype=float)
+
+    for i in range(n):
+        for h in range(k):
+            sc = np.zeros(total_dim, dtype=float)
+            if eta_dim:
+                sc[:eta_dim] = -pi[:eta_dim]
+                if h < eta_dim:
+                    sc[h] += 1.0
+            start = offsets[h]
+            end = start + param_dims[h]
+            sc[start:end] = raw_component_scores[h][i]
+            complete_opg += tau[i, h] * np.outer(sc, sc)
+
+    observed_opg = S_obs.T @ S_obs
+    observed_opg = 0.5 * (observed_opg + observed_opg.T)
+    complete_opg = 0.5 * (complete_opg + complete_opg.T)
+    missing = complete_opg - observed_opg
+    missing = 0.5 * (missing + missing.T)
+
+    return observed_opg, complete_opg, missing, S_obs, param_dims
+
+
+def classification_information_fmvmm(X, pi, alpha, dist_comb, labels):
+    """
+    Modified-Louis/classification information for hard EM.
+
+    This treats component labels as known. The missing-information term from
+    uncertain membership is therefore zero. The eta block is the multinomial
+    complete-data information, and component blocks are OPG component
+    information computed only on hard-assigned observations.
+
+    Parameter order is the same internal identifiable order used by the soft
+    method:
+      eta_1,...,eta_{k-1}, theta_1, ..., theta_k
+    """
+    X = np.asarray(X, dtype=float)
+    pi = np.asarray(pi, dtype=float)
+    labels = np.asarray(labels, dtype=int)
+    n = X.shape[0]
+    k = len(dist_comb)
+    eta_dim = max(k - 1, 0)
+
+    if labels.shape[0] != n:
+        raise ValueError("labels must have one entry per observation.")
+
+    component_scores = []
+    param_dims = []
+    for j, dist_module in enumerate(dist_comb):
+        S_all = safe_component_score_matrix(dist_module, X, alpha[j])
+        S_j = S_all[labels == j]
+        component_scores.append(S_j)
+        param_dims.append(S_all.shape[1])
+
+    total_dim = eta_dim + sum(param_dims)
+    I = np.zeros((total_dim, total_dim), dtype=float)
+
+    if eta_dim:
+        I_eta, _, _ = pi_info_constrained(pi, n)
+        I[:eta_dim, :eta_dim] = I_eta
+
+    cursor = eta_dim
+    for S_j, d_j in zip(component_scores, param_dims):
+        if S_j.shape[0] > 0:
+            block = S_j.T @ S_j
+            I[cursor:cursor + d_j, cursor:cursor + d_j] = 0.5 * (block + block.T)
+        cursor += d_j
+
+    tau_hard = np.zeros((n, k), dtype=float)
+    tau_hard[np.arange(n), labels] = 1.0
+    S_complete, _, _ = observed_score_matrix_fmvmm(X, pi, alpha, dist_comb, tau_hard)
+    missing = np.zeros_like(I)
+
+    return I, I.copy(), missing, S_complete, param_dims
+
+
+def invert_information_matrix(info, ridge=1e-8, use_pinv=True):
+    info = np.asarray(info, dtype=float)
+    info = 0.5 * (info + info.T)
+    if ridge and ridge > 0:
+        info = info + ridge * np.eye(info.shape[0])
+    try:
+        cov = np.linalg.pinv(info) if use_pinv else np.linalg.inv(info)
+    except np.linalg.LinAlgError:
+        cov = np.linalg.pinv(info)
+    se = np.sqrt(np.maximum(np.diag(cov), 0.0))
+    return info, cov, se
+
+
+def pi_cov_from_eta_cov(pi, cov_eta):
+    if len(pi) <= 1:
+        return np.zeros((len(pi), len(pi)))
+    J = pi_jacobian_from_eta(pi)
+    return J @ cov_eta @ J.T
+
+
+def user_scale_transform(pi, param_dims):
+    """
+    Linear delta-method map from internal [eta, theta] to user [pi, theta].
+    """
+    pi = np.asarray(pi, dtype=float)
+    k = pi.size
+    eta_dim = max(k - 1, 0)
+    theta_dim = int(np.sum(param_dims))
+    T = np.zeros((k + theta_dim, eta_dim + theta_dim), dtype=float)
+    if eta_dim:
+        T[:k, :eta_dim] = pi_jacobian_from_eta(pi)
+    if theta_dim:
+        T[k:, eta_dim:] = np.eye(theta_dim)
+    return T
+
+
+def transform_information_to_user_scale(pi, param_dims, cov_internal,
+                                        ridge=1e-8, use_pinv=True):
+    """
+    Return covariance/SE for [all pi, theta] by delta method.
+
+    The all-pi covariance is singular because sum(pi)=1. We therefore report a
+    generalized information matrix as the Moore-Penrose inverse of the user-scale
+    covariance. The SEs are still the natural marginal SEs for all pi values.
+    """
+    T = user_scale_transform(pi, param_dims)
+    cov_user = T @ cov_internal @ T.T
+    cov_user = 0.5 * (cov_user + cov_user.T)
+    info_user = np.linalg.pinv(cov_user)
+    info_user = 0.5 * (info_user + info_user.T)
+    se_user = np.sqrt(np.maximum(np.diag(cov_user), 0.0))
+    return info_user, cov_user, se_user, T
+
+
 def ecdf_from_log_density(log_density):
     """
     Compute the empirical cumulative distribution function (ECDF) from log-density values.
@@ -351,8 +831,12 @@ def get_dist_names(dist_comb):
 
 
 class fmvmm(BaseMixture):
-    def __init__(self,n_clusters,tol=0.0001, list_of_dist=all_dist,specific_comb=False,initialization="kmeans",print_log_likelihood=False,max_iter=25, verbose=True, debug = False):
-        super().__init__(n_clusters=n_clusters, EM_type="Hard", mixture_type="nonidentical", tol=tol, print_log_likelihood=print_log_likelihood, max_iter=max_iter, verbose=verbose)
+    def __init__(self,n_clusters,tol=0.0001, list_of_dist=all_dist,specific_comb=False,initialization="kmeans",print_log_likelihood=False,max_iter=25, verbose=True, debug = False, em_type="soft", gh_mstep_kwargs=None, init_fit_kwargs=None):
+        em_type_normalized = em_type.lower()
+        if em_type_normalized not in ("hard", "soft"):
+            raise ValueError("em_type must be either 'hard' or 'soft'.")
+        EM_type = "Soft" if em_type_normalized == "soft" else "Hard"
+        super().__init__(n_clusters=n_clusters, EM_type=EM_type, mixture_type="nonidentical", tol=tol, print_log_likelihood=print_log_likelihood, max_iter=max_iter, verbose=verbose)
         self.k=n_clusters
         self.list_of_dist = list_of_dist
         self.specific_comb=specific_comb
@@ -367,6 +851,14 @@ class fmvmm(BaseMixture):
                 itertools.combinations_with_replacement(self.dist_variables, self.k))
         self.initialization=initialization
         self.debug = debug
+        self.em_type = em_type_normalized
+        self.gh_mstep_kwargs = {} if gh_mstep_kwargs is None else gh_mstep_kwargs
+        self.init_fit_kwargs = {} if init_fit_kwargs is None else init_fit_kwargs
+        self.init_fit_kwargs_by_module = {
+            dist_map[name]: kwargs
+            for name, kwargs in self.init_fit_kwargs.items()
+            if name in dist_map
+        }
 
     def _log_pdf_non_identical(self,X,alphas,dist_comb):
         N,p=X.shape
@@ -374,7 +866,8 @@ class fmvmm(BaseMixture):
         probs=np.empty((N, k))
         for j in range(k):
             alpha=alphas[j]
-            probs[:, j]=dist_comb[j].logpdf(X,*alpha)
+            log_prob = np.asarray(dist_comb[j].logpdf(X,*alpha), dtype=float)
+            probs[:, j]=np.where(np.isfinite(log_prob), log_prob, -1e300)
         return probs
 
     def _estimate_weighted_log_prob_nonidentical(self, X, alpha, pi, dist_comb):
@@ -401,15 +894,35 @@ class fmvmm(BaseMixture):
                 if self.initialization=="kmeans":
 
                     self.pi_not, self.alpha_not = fmm_kmeans_init(
-                        self.data, self.k, self.dist_combs[l])
+                        self.data, self.k, self.dist_combs[l],
+                        fit_kwargs_by_module=self.init_fit_kwargs_by_module)
                     self.alpha_temp = self.alpha_not
                     self.pi_temp = self.pi_not
                 else:
                     self.pi_not, self.alpha_not = fmm_gmm_init(
-                        self.data, self.k, self.dist_combs[l])
+                        self.data, self.k, self.dist_combs[l],
+                        fit_kwargs_by_module=self.init_fit_kwargs_by_module)
                     self.alpha_temp = self.alpha_not
                     self.pi_temp = self.pi_not
-                pi_new,alpha_new, log_likelihood_new,log_gamma_new=self._fit(self.data,self.pi_temp,self.alpha_temp,fmm_estimate_alphas,dist_comb=self.dist_combs[l])
+                if self.EM_type == "Soft":
+                    pi_new,alpha_new, log_likelihood_new,log_gamma_new=self._fit(
+                        self.data,
+                        self.pi_temp,
+                        self.alpha_temp,
+                        fmm_estimate_alphas_soft,
+                        dist_comb=self.dist_combs[l],
+                        soft_dist_comb=self.dist_combs[l],
+                        gh_mstep_kwargs=self.gh_mstep_kwargs
+                    )
+                else:
+                    pi_new,alpha_new, log_likelihood_new,log_gamma_new=self._fit(
+                        self.data,
+                        self.pi_temp,
+                        self.alpha_temp,
+                        fmm_estimate_alphas,
+                        dist_comb=self.dist_combs[l],
+                        fit_kwargs_by_module=self.init_fit_kwargs_by_module
+                    )
                 self.list_aic.append(
                     fmm_aic(alpha_new, log_likelihood_new, self.dist_combs[l] ))
                 self.list_bic.append(
@@ -467,10 +980,10 @@ class fmvmm(BaseMixture):
         return [str(best_mix[i].__name__) for i in range(len(best_mix))]
 
     def best_params(self):
-        return self.list_pi[np.argmin(self.list_aic)], self.list_alpha[np.argmin(self.list_aic)]
+        return self.list_pi[np.argmin(self.list_bic)], self.list_alpha[np.argmin(self.list_bic)]
 
     def best_predict(self):
-        return self.list_cluster[np.argmin(self.list_aic)]
+        return self.list_cluster[np.argmin(self.list_bic)]
 
     def best_predict_new(self, x):
         data_lol = x.values.tolist()
@@ -478,7 +991,7 @@ class fmvmm(BaseMixture):
         for l in range(len(self.dist_combs)):
             cluster, _ = mixture_clusters(self.gamma_matrix[l], data_lol)
             cluster_all.append(cluster)
-        return cluster_all[np.argmin(self.list_aic)]
+        return cluster_all[np.argmin(self.list_bic)]
 
     def best_aic(self):
         return np.min(self.list_aic)
@@ -592,192 +1105,165 @@ class fmvmm(BaseMixture):
     #
     #     return mixture_info_mats, mixture_ses
 
-    def get_info_mat(self):
+    def get_info_mat(self, method="auto", ridge=1e-8, use_pinv=True,
+                     parameterization="user", return_details=False):
         """
-        Compute (blockwise) Fisher information matrices and standard errors
-        for each worked mixture.
+        Observed information and standard errors for each fitted FMVMM candidate.
 
-        Uses:
-          - constrained mixture-weight information (pi_info_constrained)
-          - PSD-projected component Fisher blocks
-          - blockwise inversion (no huge pinv)
+        Parameters
+        ----------
+        method : {"auto", "soft", "score", "opg", "louis",
+                  "hard", "classification", "modified_louis"}
+            "auto" uses "soft"/"louis" for soft-EM fits and
+            "classification" for hard-EM fits.
 
-        Returns
-        -------
-        mixture_info_mats : list of 2D ndarrays
-            Block-diagonal Fisher matrices
-        mixture_ses : list of 1D ndarrays
-            Concatenated SE vectors
+            Soft methods use the full observed-data score/Louis information,
+            including membership uncertainty. Hard/classification methods treat
+            labels as known; the missing-information term is zero by
+            construction.
+        ridge : float
+            Ridge added before inversion for numerical stability.
+        use_pinv : bool
+            Use Moore-Penrose inverse by default; mixture information can be
+            nearly singular when components overlap or labels are weakly
+            identified.
+        return_details : bool
+            If True, also return diagnostics and covariance matrices.
+        parameterization : {"user", "eta", "internal"}
+            "user" returns all pi values followed by component parameters. The
+            all-pi covariance is singular because sum(pi)=1, so the returned
+            information matrix is a generalized information matrix. "eta" or
+            "internal" returns the identifiable eta-logit parameterization.
+
+        Notes
+        -----
+        Internal parameter order is:
+          eta_1,...,eta_{k-1}, theta_1, ..., theta_k
+        where eta_j = log(pi_j / pi_k). The returned SE vector is on this
+        identifiable scale when parameterization="eta". The default
+        parameterization="user" returns SEs for all pi values via delta method.
         """
+        method = method.lower()
+        parameterization = parameterization.lower()
 
-        mixture_ses = []
+        if method == "auto":
+            method = "classification" if self.EM_type == "Hard" else "louis"
+        if method in {"opg", "soft"}:
+            method = "score"
+        if method in {"hard", "modified_louis", "classification_louis"}:
+            method = "classification"
+        if method not in {"score", "louis", "classification"}:
+            raise NotImplementedError(
+                "method must be 'auto', 'score', 'opg', 'louis', "
+                "'hard', 'classification', or 'modified_louis'."
+            )
+        if parameterization not in {"user", "eta", "internal"}:
+            raise ValueError("parameterization must be 'user', 'eta', or 'internal'.")
+
         mixture_info_mats = []
+        mixture_ses = []
+        details_all = []
+
+        X = np.asarray(self.data, dtype=float)
 
         for a, mix in enumerate(self.worked_dist):
-
+            pi = np.asarray(self.list_pi[a], dtype=float)
+            alpha = self.list_alpha[a]
+            tau = np.asarray(self.list_gamma_matrix[a], dtype=float)
             k = len(mix)
 
-            # -----------------------------
-            # Data & params
-            # -----------------------------
-            cwise_data = organize_data_by_clusters(
-                np.array(self.data),
-                self.list_cluster[a]
+            if method == "classification":
+                labels = np.asarray(self.list_cluster[a], dtype=int)
+                I_raw, complete_opg, missing_info, S_obs, param_dims = (
+                    classification_information_fmvmm(X, pi, alpha, mix, labels)
+                )
+                information_label = "hard_classification_modified_louis"
+            elif method == "louis":
+                I_raw, complete_opg, missing_info, S_obs, param_dims = (
+                    louis_score_decomposition_fmvmm(X, pi, alpha, mix, tau)
+                )
+                information_label = "soft_louis_score_decomposition"
+            else:
+                S_obs, _, param_dims = observed_score_matrix_fmvmm(
+                    X, pi, alpha, mix, tau
+                )
+                I_raw = S_obs.T @ S_obs
+                I_raw = 0.5 * (I_raw + I_raw.T)
+                complete_opg = None
+                missing_info = None
+                information_label = "soft_observed_score_opg"
+
+            I_internal, cov_internal, se_internal = invert_information_matrix(
+                I_raw, ridge=ridge, use_pinv=use_pinv
             )
 
-            mle_params = self.list_alpha[a]
-            N_j, N = mixture_counts(self.list_gamma_matrix[a], mode="hard")
+            eta_dim = max(k - 1, 0)
+            cov_eta = cov_internal[:eta_dim, :eta_dim] if eta_dim else np.zeros((0, 0))
+            cov_pi = pi_cov_from_eta_cov(pi, cov_eta)
+            se_pi = np.sqrt(np.maximum(np.diag(cov_pi), 0.0))
+            I_user, cov_user, se_user, user_transform = transform_information_to_user_scale(
+                pi, param_dims, cov_internal, ridge=ridge, use_pinv=use_pinv
+            )
 
-            # ============================================================
-            # (1) Mixture weights (constrained)
-            # ============================================================
-            _, _, Cov_pi = pi_info_constrained(self.list_pi[a], N)
-            I_pi = np.linalg.pinv(Cov_pi)   # k x k
+            score_sum = S_obs.sum(axis=0)
+            try:
+                condition_number = np.linalg.cond(I_internal)
+            except np.linalg.LinAlgError:
+                condition_number = np.inf
 
-            var_pi = np.maximum(np.diag(Cov_pi), 1e-12)
-            se_parts = [np.sqrt(var_pi)]
+            if parameterization == "user":
+                mixture_info_mats.append(I_user)
+                mixture_ses.append(se_user)
+                returned_parameterization = "user_all_pi"
+            else:
+                mixture_info_mats.append(I_internal)
+                mixture_ses.append(se_internal)
+                returned_parameterization = "eta_internal"
 
-            # ============================================================
-            # (2) Component blocks
-            # ============================================================
-            mix_info = []
-            param_dims = []
+            details_all.append({
+                "method": method,
+                "information_label": information_label,
+                "returned_parameterization": returned_parameterization,
+                "internal_parameterization": "eta logits followed by component score_mat blocks",
+                "user_parameterization": "all pi followed by component score_mat blocks",
+                "eta_dim": eta_dim,
+                "component_param_dims": param_dims,
+                "info_internal": I_internal,
+                "cov_internal": cov_internal,
+                "se_internal": se_internal,
+                "info_user": I_user,
+                "cov_user": cov_user,
+                "se_user": se_user,
+                "user_transform": user_transform,
+                "cov": cov_user if parameterization == "user" else cov_internal,
+                "cov_eta": cov_eta,
+                "cov_pi": cov_pi,
+                "se_pi": se_pi,
+                "observed_score_matrix": S_obs,
+                "score_sum_norm": float(np.linalg.norm(score_sum)),
+                "condition_number": float(condition_number),
+                "complete_score_opg": complete_opg,
+                "missing_information": missing_info,
+            })
 
-            for b, mix_dist in enumerate(mix):
-
-                fisher_info, param_len,_,_,_ = compute_info_individual_fmvmm(
-                    mix_dist,
-                    mle_params[b],
-                    cwise_data[b],
-                    epsilon=0.06
-                )
-
-                # enforce symmetry + PSD
-                fisher_info = project_to_psd(fisher_info, eps=1e-8)
-
-                try:
-                    inv_block = np.linalg.inv(fisher_info)
-                except np.linalg.LinAlgError:
-                    inv_block = np.linalg.pinv(fisher_info)
-
-                var_b = np.maximum(np.diag(inv_block), 1e-12)
-                se_parts.append(np.sqrt(var_b))
-
-                mix_info.append(fisher_info)
-                param_dims.append(param_len)
-
-            # ============================================================
-            # (3) Assemble block-diagonal Fisher (optional, for output)
-            # ============================================================
-            big_dim = k + sum(param_dims)
-            I_total = np.zeros((big_dim, big_dim))
-
-            # pi block
-            # I_total[:k, :k] = np.linalg.pinv(Cov_pi)
-            I_total[:k, :k] = I_pi
-
-            row = k
-            for j in range(k):
-                d = param_dims[j]
-                I_total[row:row+d, row:row+d] = mix_info[j]
-                row += d
-
-            # ============================================================
-            # (4) Store
-            # ============================================================
-            mixture_ses.append(np.concatenate(se_parts))
-            mixture_info_mats.append(I_total)
-
+        if return_details:
+            return mixture_info_mats, mixture_ses, details_all
         return mixture_info_mats, mixture_ses
 
-    def get_info_mat_soft(self):
+    def get_info_mat_soft(self, *args, **kwargs):
         """
-        Observed-likelihood OPG information using weighted per-observation scores.
-
-        For component h:
-            u_i,h = tau_{ih} * s_{ih}
-            I_h = sum_i u_i,h u_i,h^T
-
-        Returns
-        -------
-        mixture_info_mats : list of 2D ndarrays
-        mixture_ses : list of 1D ndarrays
+        Corrected full soft-mixture observed information. See get_info_mat().
         """
+        kwargs.setdefault("method", "louis")
+        return self.get_info_mat(*args, **kwargs)
 
-        mixture_ses = []
-        mixture_info_mats = []
-
-        for a, mix in enumerate(self.worked_dist):
-
-            k = len(mix)
-            X = np.asarray(self.data)
-            tau = self.list_gamma_matrix[a]      # (n, k)
-            pi = self.list_pi[a]
-            n = X.shape[0]
-
-            # ============================================================
-            # (1) Mixture weights (simplex-aware)
-            # ============================================================
-            _, _, Cov_pi = pi_info_constrained(pi, n)
-            I_pi = np.linalg.pinv(Cov_pi)
-
-            se_parts = [np.sqrt(np.maximum(np.diag(Cov_pi), 1e-12))]
-
-            mix_info = []
-            param_dims = []
-
-            # ============================================================
-            # (2) Component blocks (soft OPG)
-            # ============================================================
-            for h, mix_dist in enumerate(mix):
-
-                # raw per-observation scores: (n, d_h)
-                S = mix_dist.score_mat(X, *self.list_alpha[a][h])
-                S = np.asarray(S, float)
-
-                if S.ndim != 2:
-                    raise ValueError("score_mat must return (n,d) matrix")
-
-                # weight by tau
-                W = tau[:, h][:, None]          # (n,1)
-                S_w = W * S                     # (n,d)
-
-                # OPG
-                I_h = S_w.T @ S_w
-                I_h = 0.5 * (I_h + I_h.T)
-                I_h += 1e-8 * np.eye(I_h.shape[0])
-                I_h = project_to_psd(I_h, eps=1e-8)
-
-                try:
-                    cov_h = np.linalg.inv(I_h)
-                except np.linalg.LinAlgError:
-                    cov_h = np.linalg.pinv(I_h)
-
-                se_h = np.sqrt(np.maximum(np.diag(cov_h), 1e-12))
-
-                mix_info.append(I_h)
-                param_dims.append(I_h.shape[0])
-                se_parts.append(se_h)
-
-            # ============================================================
-            # (3) Assemble block-diagonal Fisher
-            # ============================================================
-            big_dim = k + sum(param_dims)
-            I_total = np.zeros((big_dim, big_dim))
-
-            # pi block
-            I_total[:k, :k] = I_pi
-
-            row = k
-            for h in range(k):
-                d = param_dims[h]
-                I_total[row:row+d, row:row+d] = mix_info[h]
-                row += d
-
-            mixture_info_mats.append(I_total)
-            mixture_ses.append(np.concatenate(se_parts))
-
-        return mixture_info_mats, mixture_ses
+    def get_info_mat_hard(self, *args, **kwargs):
+        """
+        Hard/classification modified-Louis information treating labels as known.
+        The missing-information term for membership uncertainty is zero.
+        """
+        kwargs.setdefault("method", "classification")
+        return self.get_info_mat(*args, **kwargs)
 
     def get_top_mixtures(self,n_top=10):
         wrk_lst=[]

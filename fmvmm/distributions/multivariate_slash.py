@@ -5,13 +5,18 @@ from fmvmm.mixtures.skewslashmix_smsn import dmvSS, d_mixedmvSS
 from fmvmm.mixsmsn.information_matrix_smsn import info_matrix_skewslash
 
 
+def _as_scalar(value):
+    arr = np.asarray(value)
+    return float(arr.reshape(-1)[0])
+
+
 def logpdf(x,mu, sigma, nu):
     p = len(mu)
-    return np.log(slashmix_smsn.dmvSS(x,mu, sigma, np.zeros(p), nu))
+    return np.log(slashmix_smsn.dmvSS(x,mu, sigma, np.zeros(p), _as_scalar(nu)))
 
 def pdf(x,mu, sigma, nu):
     p = len(mu)
-    return slashmix_smsn.dmvSS(x,mu, sigma, np.zeros(p), nu)
+    return slashmix_smsn.dmvSS(x,mu, sigma, np.zeros(p), _as_scalar(nu))
 
 def loglike(x,mu, sigma, nu):
 
@@ -25,10 +30,10 @@ def total_params(mu, sigma, nu):
 def rvs(mu, sigma, nu, size = 1):
     p = len(mu)
 
-    return gen_SS_multi(size, mu, sigma, np.zeros(p), nu)
+    return gen_SS_multi(size, mu, sigma, np.zeros(p), _as_scalar(nu))
 
-def fit(x):
-    model = slashmix_smsn.SlashMix(1, verbose = False)
+def fit(x, tol=1e-4, max_iter=25):
+    model = slashmix_smsn.SlashMix(1, tol=tol, max_iter=max_iter, verbose = False)
     model.fit(x)
     _, alphas = model.get_params()
 

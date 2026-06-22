@@ -60,7 +60,13 @@ def fmm_pi_estimate(gamma_temp_ar,data_cwise):
     return pi_new
 
 
-def fmm_kmeans_init(data, k,dist_comb):
+def _fit_component_with_kwargs(dist, x, fit_kwargs_by_module=None):
+    fit_kwargs_by_module = {} if fit_kwargs_by_module is None else fit_kwargs_by_module
+    kwargs = fit_kwargs_by_module.get(dist, {})
+    return dist.fit(x, **kwargs)
+
+
+def fmm_kmeans_init(data, k,dist_comb, fit_kwargs_by_module=None):
     n = len(data)
     kmeans = KMeans(n_clusters=k, random_state=1)
     kmeans.fit(data)
@@ -69,10 +75,13 @@ def fmm_kmeans_init(data, k,dist_comb):
     for i in range(n):
         data_cwise[kmeans.labels_[i]].append(data_lol[i])
     pi_not = [len(data_cwise[m])/n for m in range(k)]
-    alpha_not=[dist_comb[j].fit(np.array(data_cwise[j])) for j in range(k)]
+    alpha_not=[
+        _fit_component_with_kwargs(dist_comb[j], np.array(data_cwise[j]), fit_kwargs_by_module)
+        for j in range(k)
+    ]
     return pi_not, alpha_not
 
-def fmm_gmm_init(data, k,dist_comb):
+def fmm_gmm_init(data, k,dist_comb, fit_kwargs_by_module=None):
     n = len(data)
     clf = mixture.GaussianMixture(n_components=k, covariance_type='full')
     clf.fit(data)
@@ -81,18 +90,25 @@ def fmm_gmm_init(data, k,dist_comb):
     for i in range(n):
         data_cwise[clf.predict(data)[i]].append(data_lol[i])
     pi_not = [len(data_cwise[m])/n for m in range(k)]
-    alpha_not=[dist_comb[j].fit(np.array(data_cwise[j])) for j in range(k)]
+    alpha_not=[
+        _fit_component_with_kwargs(dist_comb[j], np.array(data_cwise[j]), fit_kwargs_by_module)
+        for j in range(k)
+    ]
     return pi_not, alpha_not
 
 
 
-def fmm_estimate_alphas(data_cwise, alpha_not, dist_comb_not):
+def fmm_estimate_alphas(data_cwise, alpha_not, dist_comb_not, fit_kwargs_by_module=None):
     alpha_new = []
     for t in range(len(data_cwise)):
         if np.array(data_cwise[t]).ndim == 1:
             alpha_new_temp = alpha_not[t]
         else:
-            alpha_new_temp = dist_comb_not[t].fit(np.array(np.array(data_cwise[t])))
+            alpha_new_temp = _fit_component_with_kwargs(
+                dist_comb_not[t],
+                np.array(np.array(data_cwise[t])),
+                fit_kwargs_by_module,
+            )
 
         alpha_new.append(alpha_new_temp)
     return alpha_new

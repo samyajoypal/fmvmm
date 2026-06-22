@@ -17,7 +17,7 @@ class BaseMixture(metaclass=ABCMeta):
         self.max_iter = max_iter
         self.verbose = verbose
         self.fitted=False
-        
+
     def _process_data(self,X):
         if isinstance(X, pd.DataFrame):
             return X.values
@@ -79,6 +79,8 @@ class BaseMixture(metaclass=ABCMeta):
             if len(self.log_likelihoods)==0:
                 self.log_likelihoods.append(log_likelihood_old)
             gamma_temp_ar=np.exp(log_gamma_temp)
+            self.alpha_temp = alpha_temp
+            self.pi_temp = pi_temp
             pi_new,alpha_new=self._m_step(gamma_temp_ar, X, estimate_alphas_function,dist_comb, **kwargs)
             post_m_step = kwargs.get("post_m_step", None)
             if post_m_step is not None:
@@ -179,9 +181,8 @@ class BaseMixture(metaclass=ABCMeta):
             return self.list_icl
         else:
             bic_value = self.bic()
-            
+
             # Compute entropy term: sum over all i and k of r_ik log(r_ik)
             entropy_term = np.sum(self.gamma_temp_ar * np.log(np.clip(self.gamma_temp_ar, 1e-10, 1)))
-            
+
             return bic_value + entropy_term
-        

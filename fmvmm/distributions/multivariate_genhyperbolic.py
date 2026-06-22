@@ -340,6 +340,14 @@ def _as_scalar_param(value, name):
     return float(arr.reshape(-1)[0])
 
 
+def _avoid_vg_singularity(lmbda, alpha_bar, d, eps=1e-8):
+    lmbda = _as_scalar_param(lmbda, "lmbda")
+    alpha_bar = _as_scalar_param(alpha_bar, "alpha_bar")
+    if alpha_bar < eps and lmbda > 0 and abs(lmbda - d / 2.0) < eps:
+        return lmbda + 0.25
+    return lmbda
+
+
 def _alphabar2chipsi(alpha_bar, lmbda, eps=1e-15):
     """
     Translate (alpha_bar, lambda) -> (chi, psi) as in R's .abar2chipsi(),
@@ -350,6 +358,8 @@ def _alphabar2chipsi(alpha_bar, lmbda, eps=1e-15):
 
     if alpha_bar < 0:
         raise ValueError("alpha_bar must be non-negative.")
+    if alpha_bar > 200:
+        alpha_bar = 200.0
 
     # --- Special cases alpha_bar ~ 0 ---
     if alpha_bar < eps:
@@ -468,7 +478,8 @@ def _check_norm_pars(mu, sigma, gamma, dimension):
 def fitghypmv(
     x, lmbda = 1, alpha_bar = 1, mu = None, sigma = None, gamma = None, symmetric = False,
     standardize = False, nit = 2000, reltol = 1e-8, abstol = 1e-7, silent = False,
-    opt_pars = {"lmbda": True, "alpha_bar": True, "mu": True, "sigma": True, "gamma": True}
+    opt_pars = {"lmbda": True, "alpha_bar": True, "mu": True, "sigma": True, "gamma": True},
+    weights = None
 ):
     """
     Estimate the parameters of the generalised hyperbolic distribution. We use
@@ -516,7 +527,39 @@ def fitghypmv(
     :rtype: dict
     """
 
+    x = np.asarray(x, dtype=float)
     n, d = x.shape
+    if weights is None:
+        weights = np.ones(n, dtype=float)
+    else:
+        weights = np.asarray(weights, dtype=float).reshape(-1)
+        if weights.shape[0] != n:
+            raise ValueError("weights must have one entry per observation.")
+        weights = np.clip(weights, 0.0, np.inf)
+    n_eff = np.sum(weights)
+    if n_eff <= np.finfo(float).eps:
+        raise ValueError("At least one observation must have positive weight.")
+
+    def _wmean(values):
+        return np.sum(weights * values) / n_eff
+
+    def _wsum(values):
+        return np.sum(weights * values)
+
+    def _weighted_cov(data, mean):
+        centered = data - mean
+        cov = (centered.T @ (weights[:, None] * centered)) / n_eff
+        cov = 0.5 * (cov + cov.T)
+        try:
+            eigvals = np.linalg.eigvalsh(cov)
+            min_eig = np.min(eigvals)
+            if min_eig < 1e-8:
+                cov = cov + (1e-8 - min_eig) * np.eye(cov.shape[0])
+        except np.linalg.LinAlgError:
+            cov = cov + 1e-8 * np.eye(cov.shape[0])
+        return cov
+
+    lmbda = _avoid_vg_singularity(lmbda, alpha_bar, d)
     chi, psi = _alphabar2chipsi(alpha_bar, lmbda)
 
 
@@ -526,22 +569,22 @@ def fitghypmv(
     # .check.opt.pars(opt.pars, symmetric)
     #opt.pars <- .check.opt.pars(opt.pars, symmetric)
 
-    m1 = np.mean(x, axis=0)
+    m1 = np.sum(weights[:, None] * x, axis=0) / n_eff
     # center = x-m1
     center = m1 -x
 
     if mu is None: mu = m1
     if (gamma is None) or symmetric: gamma = np.zeros(d)
     if symmetric: opt_pars["gamma"] = False
-    if sigma is None: sigma = np.cov(x.T)
+    if sigma is None: sigma = _weighted_cov(x, m1)
 
     # check normal and skewness parameters  for consistency
     _check_norm_pars(mu, sigma, gamma, d)
 
     if standardize:
         # data will be standardized and initial values will be adapted
-        tmp_mean = np.mean(x, axis=0)
-        sigma_chol = np.linalg.cholesky(np.linalg.inv(np.cov(x.T))).T
+        tmp_mean = np.sum(weights[:, None] * x, axis=0) / n_eff
+        sigma_chol = np.linalg.cholesky(np.linalg.inv(_weighted_cov(x, tmp_mean))).T
         x = x - tmp_mean
         x = x @ sigma_chol
         sigma = sigma_chol.T @ sigma @ sigma_chol
@@ -553,9 +596,10 @@ def fitghypmv(
     rel_closeness = 100
     abs_closeness = 100
     tmp_fit = {"convergence": 0, "message": None}
+    lmbda = _avoid_vg_singularity(lmbda, alpha_bar, d)
     chi, psi = _alphabar2chipsi(alpha_bar, lmbda)
     # print("chi,psi:",chi,psi)
-    ll = np.sum(logpdf(x, lmbda=lmbda, chi=chi, psi=psi, mu=mu, sigma=sigma, gamma=gamma))
+    ll = _wsum(logpdf(x, lmbda=lmbda, chi=chi, psi=psi, mu=mu, sigma=sigma, gamma=gamma))
     # print("ll",ll)
 
     ll_save = []
@@ -582,23 +626,23 @@ def fitghypmv(
         Offset = gamma @ inv_sigma @ gamma.T
 
         delta = gig.expect(lmbda-d/2, Q+chi, psi+Offset, func = "1/x")
-        delta_bar = np.mean(delta)
+        delta_bar = _wmean(delta)
         eta = gig.expect(lmbda-d/2, Q+chi, psi+Offset, func = "x")
-        eta_bar = np.mean(eta)
+        eta_bar = _wmean(eta)
 
         if opt_pars["gamma"]:
-            gamma = -(delta @ center) / (n*delta_bar*eta_bar - n)
+            gamma = -((weights * delta) @ center) / (n_eff*delta_bar*eta_bar - n_eff)
             # print("gamma",gamma)
 
         if opt_pars["mu"]:
-            mu = ((delta @ x)/n - gamma) / delta_bar
+            mu = (((weights * delta) @ x)/n_eff - gamma) / delta_bar
             # print("mu",mu)
 
         diff = x - mu
-        tmp = delta[:, None] * diff
+        tmp = (weights * delta)[:, None] * diff
 
         if opt_pars["sigma"]:
-            sigma = (tmp.T @ diff)/n - np.outer(gamma, gamma) * eta_bar
+            sigma = (tmp.T @ diff)/n_eff - np.outer(gamma, gamma) * eta_bar
             # print("sigma",sigma)
 
         ##<------------------------ M-Step: EM update ------------------------------>
@@ -609,29 +653,30 @@ def fitghypmv(
 
         Offset = gamma @ inv_sigma @ gamma.T
 
-        xi_sum = np.sum(gig.expect(lmbda-d/2, Q+chi, psi+Offset, func="logx"))
+        xi_sum = _wsum(gig.expect(lmbda-d/2, Q+chi, psi+Offset, func="logx"))
 
 
         if alpha_bar==0 and lmbda > 0 and not opt_pars["alpha_bar"] and opt_pars["lmbda"]:
             ##<------  VG case  ------>
 
-            eta_sum = np.sum(gig.expect(lmbda-d/2, Q+chi, psi+Offset, func="x"))
+            eta_sum = _wsum(gig.expect(lmbda-d/2, Q+chi, psi+Offset, func="x"))
 
-            minimizer_kwargs = {"method": "L-BFGS-B","args":(eta_sum, xi_sum, n)}
+            minimizer_kwargs = {"method": "L-BFGS-B","args":(eta_sum, xi_sum, n_eff)}
 
             x0= np.log(lmbda)
 
-            tmp_fit = scipy.optimize.minimize(vg_optfunc, x0, args=(eta_sum, xi_sum, n), method='L-BFGS-B') #method='L-BFGS-B',np.log(lmbda)+2
+            tmp_fit = scipy.optimize.minimize(vg_optfunc, x0, args=(eta_sum, xi_sum, n_eff), method='L-BFGS-B') #method='L-BFGS-B',np.log(lmbda)+2
 
             lmbda = _as_scalar_param(np.exp(tmp_fit["x"]), "lmbda")
+            lmbda = _avoid_vg_singularity(lmbda, alpha_bar, d)
 
 
         elif alpha_bar==0 and lmbda<0 and not opt_pars["alpha_bar"] and opt_pars["lmbda"]:
             ##<------  Student-t case  ------>
-            delta_sum = np.sum(gig.expect(lmbda-d/2, Q+chi, psi+Offset, func="1/x"))
+            delta_sum = _wsum(gig.expect(lmbda-d/2, Q+chi, psi+Offset, func="1/x"))
 
             x0= custom_log(-1 - lmbda) #np.log(lmbda) np.random.rand()
-            tmp_fit = scipy.optimize.minimize(t_optfunc, x0, args=(delta_sum, xi_sum, n), method='L-BFGS-B') #custom_log(-1 - lmbda)+10
+            tmp_fit = scipy.optimize.minimize(t_optfunc, x0, args=(delta_sum, xi_sum, n_eff), method='L-BFGS-B') #custom_log(-1 - lmbda)+10
 
             lmbda = _as_scalar_param((-1 - np.exp(tmp_fit["x"])), "lmbda")
 
@@ -639,8 +684,8 @@ def fitghypmv(
 
         elif opt_pars["lmbda"] or opt_pars["alpha_bar"]:
             ##<------  ghyp, hyp, NIG case  ------>
-            delta_sum = np.sum(gig.expect(lmbda-d/2, Q+chi, psi+Offset, func="1/x"))
-            eta_sum = np.sum(gig.expect(lmbda-d/2, Q+chi, psi+Offset, func="x"))
+            delta_sum = _wsum(gig.expect(lmbda-d/2, Q+chi, psi+Offset, func="1/x"))
+            eta_sum = _wsum(gig.expect(lmbda-d/2, Q+chi, psi+Offset, func="x"))
 
             mix_pars = {"lmbda": lmbda, "alpha_bar": np.log(alpha_bar)}
             thepars = {x: mix_pars[x] for x in ["lmbda", "alpha_bar"] if opt_pars[x]}
@@ -652,7 +697,7 @@ def fitghypmv(
 
 
             tmp_fit = scipy.optimize.minimize(gig_optfunc, thepars_v, args=(
-                mix_pars_fixed_v, pars_order, delta_sum, eta_sum, xi_sum, n), method='L-BFGS-B')
+                mix_pars_fixed_v, pars_order, delta_sum, eta_sum, xi_sum, n_eff), method='L-BFGS-B')
 
             par = np.concatenate([tmp_fit["x"], mix_pars_fixed_v])
 
@@ -676,7 +721,7 @@ def fitghypmv(
 
         ## Test for convergence
         ll_old = ll
-        ll = np.sum(logpdf(x, lmbda=lmbda, chi=chi, psi=psi, mu=mu, sigma=sigma, gamma=gamma))
+        ll = _wsum(logpdf(x, lmbda=lmbda, chi=chi, psi=psi, mu=mu, sigma=sigma, gamma=gamma))
 
         abs_closeness = np.abs(ll - ll_old)
         rel_closeness = np.abs((ll - ll_old)/ll_old)
@@ -707,7 +752,7 @@ def fitghypmv(
         gamma = inv_sigma_chol @ gamma
 
         chi, psi = _alphabar2chipsi(alpha_bar, lmbda)
-        ll = np.sum(logpdf(x, lmbda=lmbda, chi=chi, psi=psi, mu=mu, sigma=sigma, gamma=gamma))
+        ll = _wsum(logpdf(x, lmbda=lmbda, chi=chi, psi=psi, mu=mu, sigma=sigma, gamma=gamma))
 
 
     nbr_fitted_params = opt_pars["alpha_bar"] + opt_pars["lmbda"] + d * (opt_pars["mu"]+opt_pars["gamma"]) +\
@@ -722,7 +767,7 @@ def fitghypmv(
 
 def fit(x, lmbda=1, alpha_bar=1, symmetric=False, standardize=False, nit=2000,
         reltol=1e-8, abstol=1e-7, silent=False, flambda=None, falpha_bar=None,
-        fmu=None, fsigma=None, fgamma=None, return_loglike=False):
+        fmu=None, fsigma=None, fgamma=None, return_loglike=False, weights=None):
     """
     Estimate the parameters of the generalised hyperbolic distribution. We
     use the (lmbda, chi, psi, mu, sigma, gamma)-parameterisation.
@@ -781,7 +826,7 @@ def fit(x, lmbda=1, alpha_bar=1, symmetric=False, standardize=False, nit=2000,
     fit = fitghypmv(
         x, lmbda=lmbda, alpha_bar=alpha_bar, mu=fmu, sigma=fsigma, gamma=fgamma,
         symmetric=symmetric, standardize=standardize, nit=nit, reltol=reltol,
-        abstol=abstol, silent=silent, opt_pars=opt_pars)
+        abstol=abstol, silent=silent, opt_pars=opt_pars, weights=weights)
 
     if fit["alpha_bar"] != 0:
         chi, psi = _alphabar2chipsi(fit["alpha_bar"], fit["lmbda"])
@@ -794,6 +839,10 @@ def fit(x, lmbda=1, alpha_bar=1, symmetric=False, standardize=False, nit=2000,
     if return_loglike:
         return fit["lmbda"], chi, psi, fit["mu"], fit["sigma"], fit["gamma"], fit["ll"]
     return fit["lmbda"], chi, psi, fit["mu"], fit["sigma"], fit["gamma"]
+
+
+def fit_weighted(x, weights, **kwargs):
+    return fit(x, weights=weights, **kwargs)
 
 
 # def info_mat(x, lmbda, chi, psi, mu, sigma, gamma):

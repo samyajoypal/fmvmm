@@ -4,13 +4,18 @@ from fmvmm.mixsmsn.gen import gen_SS_multi
 from fmvmm.mixtures.skewslashmix_smsn import dmvSS, d_mixedmvSS
 from fmvmm.mixsmsn.information_matrix_smsn import info_matrix_skewslash
 
+def _as_scalar(value):
+    arr = np.asarray(value)
+    return float(arr.reshape(-1)[0])
+
+
 def logpdf(x,mu, sigma, lmbda, nu):
 
-    return np.log(skewslashmix_smsn.dmvSS(x,mu, sigma, lmbda, nu))
+    return np.log(skewslashmix_smsn.dmvSS(x,mu, sigma, lmbda, _as_scalar(nu)))
 
 def pdf(x,mu, sigma, lmbda, nu):
 
-    return skewslashmix_smsn.dmvSS(x,mu, sigma, lmbda, nu)
+    return skewslashmix_smsn.dmvSS(x,mu, sigma, lmbda, _as_scalar(nu))
 
 def loglike(x,mu, sigma, lmbda, nu):
 
@@ -23,10 +28,10 @@ def total_params(mu, sigma, lmbda, nu):
 
 def rvs(mu, sigma, lmbda, nu, size = 1):
 
-    return gen_SS_multi(size, mu, sigma, lmbda, nu)
+    return gen_SS_multi(size, mu, sigma, lmbda, _as_scalar(nu))
 
-def fit(x):
-    model = skewslashmix_smsn.SkewSlashMix(1, verbose = False)
+def fit(x, tol=1e-4, max_iter=25):
+    model = skewslashmix_smsn.SkewSlashMix(1, tol=tol, max_iter=max_iter, verbose = False)
     model.fit(x)
     _, alphas = model.get_params()
 

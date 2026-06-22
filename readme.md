@@ -6,8 +6,10 @@ FMVMM is a Python package providing a comprehensive collection of finite mixture
 - Implements finite mixtures of various multivariate distributions.
 - Supports clustering using Dirichlet Mixture Models and mixtures of other non-identical distributions.
 - Provides multiple model selection criteria such as AIC, BIC, and ICL.
-- Includes efficient parameter estimation and standard error calculations.
-- Example Jupyter notebooks available in the `examples/` folder.
+- Uses soft EM by default for FMVMM, with hard EM still available through `em_type="hard"`.
+- Provides information matrices and standard errors for soft EM and hard/classification EM fits.
+- Provides a generic inference layer for Wald, score, likelihood-ratio, and bootstrap-based tests.
+- Example Jupyter notebooks are available in `fmvmm/Examples/`; executable examples are available in `Tests/`.
 
 ## Mixture Models Included
 - **Dirichlet Mixture Model** (`DMM_Soft`, `DMM_Hard`)
@@ -42,7 +44,7 @@ pip install fmvmm
 ```
 
 ## Usage
-Each Python class in FMVMM provides the following methods:
+Each mixture class in FMVMM follows the same basic workflow:
 
 ```python
 from fmvmm.mixtures.DMM_Soft import DMM_Soft
@@ -57,7 +59,79 @@ pi, alpha = model.get_params()  # Get MLE of parameters
 info_matrix, se = model.get_info_mat()  # Get information matrix and standard errors
 ```
 
-For more detailed examples, see the Jupyter notebooks in the `examples/` folder.
+### Flexible Multivariate Mixtures
+
+`fmvmm` fits mixtures whose components may come from different distribution
+families. Soft EM is the default; hard EM can be requested explicitly.
+
+```python
+import numpy as np
+
+from fmvmm.distributions import multivariate_norm as mvn
+from fmvmm.distributions import multivariate_skew_laplace as mvsl
+from fmvmm.mixtures.FMVMM import fmvmm
+
+x1 = mvn.rvs(
+    np.array([0.0, 0.0]),
+    np.array([[0.45, 0.08], [0.08, 0.35]]),
+    size=40,
+)
+x2 = mvsl.rvs(
+    np.array([2.5, 2.0]),
+    np.array([[0.55, -0.05], [-0.05, 0.45]]),
+    np.array([0.7, -0.3]),
+    size=40,
+)
+data = np.vstack([x1, x2])
+
+model = fmvmm(n_clusters=2, list_of_dist=["mvn", "mvsl"])
+model.fit(data)
+
+print(model.best_mixture())
+print(model.best_bic())
+
+# Default: user-facing scale, all pi values followed by component parameters.
+info_mats, ses = model.get_info_mat()
+
+# Explicit alternatives useful for inference and method comparison.
+soft_info, soft_se, soft_details = model.get_info_mat_soft(return_details=True)
+hard_model = fmvmm(n_clusters=2, list_of_dist=["mvn", "mvsl"], em_type="hard")
+hard_model.fit(data)
+hard_info, hard_se, hard_details = hard_model.get_info_mat_hard(return_details=True)
+```
+
+### Likelihood-Based Inference
+
+Generic Wald, score, likelihood-ratio, and bootstrap tests are available through
+`fmvmm.inference`. Constraints are expressed using parameter names exposed by
+the fitted model adapter.
+
+```python
+from fmvmm.inference import as_adapter, fixed_value, wald_test, score_test, lrt
+
+adapter = as_adapter(model)
+params = adapter.parameter_vector(parameterization="user")
+
+# Example: H0: pi_1 = 0.5
+H = fixed_value(params, "pi[0]", 0.5)
+wald_result = wald_test(model, H, parameterization="user")
+
+# Score tests use fitted-null score/information coordinates.
+score_result = score_test(model, ["eta[0]"], parameterization="internal")
+
+# LRT is generic; use bootstrap references for non-regular mixture hypotheses.
+lrt_result = lrt(full_model, null_model, df=1)
+```
+
+For runnable examples and smoke tests:
+
+```bash
+PYTHONPATH=. python Tests/fmvmm_info_tests.py
+PYTHONPATH=. python Tests/inference_tests.py
+PYTHONPATH=. python Tests/dmm_inference_example.py
+```
+
+For more detailed examples, see the Jupyter notebooks in `fmvmm/Examples/`.
 
 ## Citation
 If you use FMVMM in your research, please cite the relevant papers:

@@ -155,7 +155,8 @@ def var(chi, psi, mu, sigma, gamma):
     return ghypmv.var(lmbda, chi, psi, mu, sigma, gamma)
 
 def fit(x, alpha_bar=1, symmetric=False, standardize=False, nit=2000, reltol=1e-8,
-        abstol=1e-7, silent=False, fmu=None, fsigma=None, fgamma=None, return_loglike=False):
+        abstol=1e-7, silent=False, fmu=None, fsigma=None, fgamma=None, return_loglike=False,
+        weights=None):
     """
     Estimate the parameters of the hyperbolic distribution. We use the
     (lmbda, chi, psi, mu, sigma, gamma)-parameterisation.
@@ -205,12 +206,16 @@ def fit(x, alpha_bar=1, symmetric=False, standardize=False, nit=2000, reltol=1e-
     fit = ghypmv.fitghypmv(
         x, lmbda=lmbda, alpha_bar=alpha_bar, mu=fmu, sigma=fsigma, gamma=fgamma,
         symmetric=symmetric, standardize=standardize, nit=nit, reltol=reltol,
-        abstol=abstol, silent=silent, opt_pars=opt_pars)
+        abstol=abstol, silent=silent, opt_pars=opt_pars, weights=weights)
 
     chi, psi = ghypmv._alphabar2chipsi(fit["alpha_bar"], fit["lmbda"])
     if return_loglike:
         return fit["lmbda"], chi, psi, fit["mu"], fit["sigma"], fit["gamma"], fit["ll"]
     return chi, psi, fit["mu"], fit["sigma"], fit["gamma"]
+
+
+def fit_weighted(x, weights, **kwargs):
+    return fit(x, weights=weights, **kwargs)
 
 # def info_mat(x, chi, psi, mu, sigma, gamma):
 #     from fmvmm.utils.utils_fmm import compute_info_scipy_fmvmm

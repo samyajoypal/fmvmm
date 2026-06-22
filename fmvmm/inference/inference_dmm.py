@@ -1,4 +1,4 @@
-"""fmvmm.inference.inference_dmm
+r"""fmvmm.inference.inference_dmm
 
 Inference utilities for Dirichlet Mixture Models (DMMs).
 
