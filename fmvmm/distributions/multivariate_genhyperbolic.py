@@ -14,6 +14,8 @@ import math
 from fmvmm.utils.utils_dist import (
     pack_gh_family_unconstrained,
     unpack_gh_family_unconstrained,
+    _pack_spd_cholesky,
+    _unpack_spd_cholesky,
     score_mat_fd_unconstrained,
     info_opg_from_scores,
 )
@@ -191,13 +193,13 @@ def loglike(x, lmbda, chi, psi, mu, sigma, gamma):
     :return: The log-likelihood given all observations and parameters.
     :rtype: float
     """
-    return np.sum(logpdf(x, chi, lmbda, psi, mu, sigma, gamma))
+    return np.sum(logpdf(x, lmbda, chi, psi, mu, sigma, gamma))
 
 
 def total_params(lmbda, chi, psi, mu, sigma, gamma):
     p = len(mu)
 
-    return 3 + 2*p + (p*(p+1)/2)
+    return 2 + 2*p + (p*(p+1)/2)
 
 
 def rvs(lmbda, chi, psi, mu, sigma, gamma, size=1):
@@ -259,7 +261,7 @@ def mean(lmbda, chi, psi, mu, sigma, gamma):
         if chi==0: # gig -> gamma
             alpha = lmbda
             beta = 0.5*psi
-            EW = beta/alpha
+            EW = alpha/beta
         elif chi>0: # gig
             alpha = np.sqrt(chi*psi)
             EW = np.sqrt(chi/psi) * kv(lmbda+1, alpha) / kv(lmbda, alpha)
@@ -297,7 +299,7 @@ def var(lmbda, chi, psi, mu, sigma, gamma):
         if chi==0: # gig -> gamma
             alpha = lmbda
             beta = 0.5*psi
-            EW = beta/alpha
+            EW = alpha/beta
             VarW = alpha/(beta**2)
         elif chi>0: # gig
             alpha = np.sqrt(chi*psi)
@@ -845,6 +847,175 @@ def fit_weighted(x, weights, **kwargs):
     return fit(x, weights=weights, **kwargs)
 
 
+def alpha_bar_from_chi_psi(chi, psi):
+    return float(np.sqrt(max(float(chi) * float(psi), 1e-300)))
+
+
+def pack_gh_alpha_bar_unconstrained(*, p, lmbda, alpha_bar, mu, sigma, gamma,
+                                    free=("lmbda", "alpha_bar")):
+    parts = []
+    if "lmbda" in free:
+        parts.append(np.array([float(lmbda)], dtype=float))
+    if "alpha_bar" in free:
+        parts.append(np.array([np.log(max(float(alpha_bar), 1e-300))], dtype=float))
+    parts.append(np.asarray(mu, dtype=float).reshape(p,))
+    diag_raw, off = _pack_spd_cholesky(np.asarray(sigma, dtype=float).reshape(p, p))
+    parts.extend([diag_raw, off, np.asarray(gamma, dtype=float).reshape(p,)])
+    return np.concatenate(parts)
+
+
+def unpack_gh_alpha_bar_unconstrained(u, *, p, fixed=None,
+                                      free=("lmbda", "alpha_bar")):
+    fixed = {} if fixed is None else fixed
+    u = np.asarray(u, dtype=float).ravel()
+    idx = 0
+    lmbda = float(fixed.get("lmbda", 0.0))
+    alpha_bar = float(fixed.get("alpha_bar", 1.0))
+
+    if "lmbda" in free:
+        lmbda = float(u[idx])
+        idx += 1
+    if "alpha_bar" in free:
+        alpha_bar = float(np.exp(u[idx]))
+        idx += 1
+
+    mu = u[idx:idx + p].copy()
+    idx += p
+    diag_raw = u[idx:idx + p].copy()
+    idx += p
+    n_off = p * (p - 1) // 2
+    off = u[idx:idx + n_off].copy()
+    idx += n_off
+    sigma = _unpack_spd_cholesky(diag_raw, off, p)
+    gamma = u[idx:idx + p].copy()
+    idx += p
+
+    if idx != u.size:
+        raise ValueError(f"Unpack consumed {idx} entries but u has {u.size}.")
+
+    chi, psi = _alphabar2chipsi(alpha_bar, lmbda)
+    return lmbda, chi, psi, mu, sigma, gamma
+
+
+def score_mat_alpha_bar(x, lmbda, alpha_bar, mu, sigma, gamma, *,
+                        free=("lmbda", "alpha_bar"), fixed=None,
+                        step=1e-5, rel_step=True):
+    x = np.asarray(x, dtype=float)
+    p = x.shape[1]
+    u_hat = pack_gh_alpha_bar_unconstrained(
+        p=p, lmbda=lmbda, alpha_bar=alpha_bar, mu=mu, sigma=sigma,
+        gamma=gamma, free=free,
+    )
+
+    def _unpack(u, *, p):
+        return unpack_gh_alpha_bar_unconstrained(
+            u, p=p, fixed=fixed, free=free,
+        )
+
+    return score_mat_fd_unconstrained(
+        x,
+        u_hat=u_hat,
+        unpack_fun=_unpack,
+        logpdf_fun=logpdf,
+        p=p,
+        step=step,
+        rel_step=rel_step,
+    )
+
+
+def pack_vg_unconstrained(*, p, lmbda, mu, sigma, gamma):
+    parts = [np.array([np.log(max(float(lmbda), 1e-300))], dtype=float)]
+    parts.append(np.asarray(mu, dtype=float).reshape(p,))
+    diag_raw, off = _pack_spd_cholesky(np.asarray(sigma, dtype=float).reshape(p, p))
+    parts.extend([diag_raw, off, np.asarray(gamma, dtype=float).reshape(p,)])
+    return np.concatenate(parts)
+
+
+def unpack_vg_unconstrained(u, *, p):
+    u = np.asarray(u, dtype=float).ravel()
+    idx = 0
+    lmbda = float(np.exp(u[idx]))
+    idx += 1
+    mu = u[idx:idx + p].copy()
+    idx += p
+    diag_raw = u[idx:idx + p].copy()
+    idx += p
+    n_off = p * (p - 1) // 2
+    off = u[idx:idx + n_off].copy()
+    idx += n_off
+    sigma = _unpack_spd_cholesky(diag_raw, off, p)
+    gamma = u[idx:idx + p].copy()
+    idx += p
+    if idx != u.size:
+        raise ValueError(f"Unpack consumed {idx} entries but u has {u.size}.")
+    return lmbda, 0.0, 2.0 * lmbda, mu, sigma, gamma
+
+
+def score_mat_vg_fit(x, lmbda, mu, sigma, gamma, step=1e-5):
+    x = np.asarray(x, dtype=float)
+    p = x.shape[1]
+    u_hat = pack_vg_unconstrained(
+        p=p, lmbda=lmbda, mu=mu, sigma=sigma, gamma=gamma,
+    )
+    return score_mat_fd_unconstrained(
+        x,
+        u_hat=u_hat,
+        unpack_fun=lambda u, *, p: unpack_vg_unconstrained(u, p=p),
+        logpdf_fun=logpdf,
+        p=p,
+        step=step,
+        rel_step=True,
+    )
+
+
+def pack_gst_unconstrained(*, p, lmbda, mu, sigma, gamma):
+    tail = max(-(float(lmbda) + 1.0), 1e-300)
+    parts = [np.array([np.log(tail)], dtype=float)]
+    parts.append(np.asarray(mu, dtype=float).reshape(p,))
+    diag_raw, off = _pack_spd_cholesky(np.asarray(sigma, dtype=float).reshape(p, p))
+    parts.extend([diag_raw, off, np.asarray(gamma, dtype=float).reshape(p,)])
+    return np.concatenate(parts)
+
+
+def unpack_gst_unconstrained(u, *, p):
+    u = np.asarray(u, dtype=float).ravel()
+    idx = 0
+    tail = float(np.exp(u[idx]))
+    idx += 1
+    lmbda = -1.0 - tail
+    chi = 2.0 * tail
+    mu = u[idx:idx + p].copy()
+    idx += p
+    diag_raw = u[idx:idx + p].copy()
+    idx += p
+    n_off = p * (p - 1) // 2
+    off = u[idx:idx + n_off].copy()
+    idx += n_off
+    sigma = _unpack_spd_cholesky(diag_raw, off, p)
+    gamma = u[idx:idx + p].copy()
+    idx += p
+    if idx != u.size:
+        raise ValueError(f"Unpack consumed {idx} entries but u has {u.size}.")
+    return lmbda, chi, 0.0, mu, sigma, gamma
+
+
+def score_mat_gst_fit(x, lmbda, mu, sigma, gamma, step=1e-5):
+    x = np.asarray(x, dtype=float)
+    p = x.shape[1]
+    u_hat = pack_gst_unconstrained(
+        p=p, lmbda=lmbda, mu=mu, sigma=sigma, gamma=gamma,
+    )
+    return score_mat_fd_unconstrained(
+        x,
+        u_hat=u_hat,
+        unpack_fun=lambda u, *, p: unpack_gst_unconstrained(u, p=p),
+        logpdf_fun=logpdf,
+        p=p,
+        step=step,
+        rel_step=True,
+    )
+
+
 # def info_mat(x, lmbda, chi, psi, mu, sigma, gamma):
 #     from fmvmm.utils.utils_fmm import compute_info_scipy_fmvmm
 #
@@ -854,43 +1025,13 @@ def fit_weighted(x, weights, **kwargs):
 
 def score_mat(x, lmbda, chi, psi, mu, sigma, gamma, step=1e-5):
     """
-    Per-observation score matrix wrt unconstrained u.
-    Returns S with shape (n, d).
+    Per-observation scores in the fitted GH parameterization:
+    lambda, log(alpha_bar), mu, Cholesky(Sigma), gamma.
     """
-    x = np.asarray(x, float)
-    p = x.shape[1]
-
-    # pack constrained -> unconstrained
-    u_hat = pack_gh_family_unconstrained(
-        p=p,
-        lmbda=lmbda,
-        chi=chi,
-        psi=psi,
-        mu=mu,
-        sigma=sigma,
-        gamma=gamma,
-        free=("lmbda", "chi", "psi")
+    return score_mat_alpha_bar(
+        x, lmbda, alpha_bar_from_chi_psi(chi, psi), mu, sigma, gamma,
+        free=("lmbda", "alpha_bar"), fixed={}, step=step,
     )
-
-    def _unpack(u, *, p):
-        return unpack_gh_family_unconstrained(
-            u,
-            p=p,
-            fixed={},
-            free=("lmbda", "chi", "psi")
-        )
-
-    S = score_mat_fd_unconstrained(
-        x,
-        u_hat=u_hat,
-        unpack_fun=_unpack,
-        logpdf_fun=logpdf,
-        p=p,
-        step=step,
-        rel_step=True
-    )
-
-    return S
 
 def info_mat(x, lmbda, chi, psi, mu, sigma, gamma, step=1e-5, ridge=1e-8):
     """

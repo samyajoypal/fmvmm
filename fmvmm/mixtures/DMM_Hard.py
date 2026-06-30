@@ -22,7 +22,9 @@ euler = -1 * psi(1)  # Euler-Mascheroni constant
 
 
 
-def estimate_alphas(data_cwise, alpha_not,dist_comb, method,post_m_step):
+def estimate_alphas(
+    data_cwise, alpha_not, dist_comb, method, post_m_step=None
+):
     alpha_new = []
     for t in range(len(data_cwise)):
         if np.array(data_cwise[t]).ndim == 1:

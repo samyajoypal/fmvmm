@@ -3,6 +3,7 @@ from fmvmm.mixtures import slashmix_smsn
 from fmvmm.mixsmsn.gen import gen_SS_multi
 from fmvmm.mixtures.skewslashmix_smsn import dmvSS, d_mixedmvSS
 from fmvmm.mixsmsn.information_matrix_smsn import info_matrix_skewslash
+from fmvmm.utils.utils_dist import info_opg_from_scores, score_mat_smsn_fd
 
 
 def _as_scalar(value):
@@ -40,38 +41,19 @@ def fit(x, tol=1e-4, max_iter=25):
     return alphas[0][0], alphas[0][1], np.array([alphas[0][3]])
 
 def info_mat(X,mu,sigma,nu):
-
-    p =len(mu)
-    g = 1
-    if isinstance(nu, np.ndarray):
-        nu = nu[0]
-    IM = info_matrix_skewslash(
-    X, [1], [mu], [sigma], [np.zeros(p)], nu,
-    d_mixedmvSS_func=d_mixedmvSS,
-    dmvSS_func=dmvSS,
-    g=g, p=p
-)
-
-    final_IM = expand_reduced_IM_to_full_no_pi_slash_from_skewslash(IM, p, g)
-
-    return final_IM
+    scores = score_mat(X, mu, sigma, nu)
+    information, _, _ = info_opg_from_scores(scores)
+    return information
 
 def score_mat(X,mu,sigma,nu):
-
-    p =len(mu)
-    g = 1
-    if isinstance(nu, np.ndarray):
-        nu = nu[0]
-    _, S = info_matrix_skewslash(
-    X, [1], [mu], [sigma], [np.zeros(p)], nu,
-    d_mixedmvSS_func=d_mixedmvSS,
-    dmvSS_func=dmvSS,
-    g=g, p=p, return_scores= True
-)
-    
-    # final_IM = expand_reduced_IM_to_full_no_pi_slash_from_skewslash(IM, p, g)
-
-    return S
+    return score_mat_smsn_fd(
+        X,
+        mu=mu,
+        sigma=sigma,
+        tail=np.asarray(nu, dtype=float).reshape(-1),
+        tail_transforms=("positive",),
+        logpdf_fun=logpdf,
+    )
 
 import numpy as np
 

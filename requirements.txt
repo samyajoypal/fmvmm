@@ -1,7 +1,6 @@
-conorm~=1.2.0
-matplotlib==3.10.9
-numpy==2.4.6
-pandas==3.0.3
-scikit-learn==1.8.0
-scipy==1.17.1
-setuptools==82.0.1
+conorm>=1.2,<2
+matplotlib>=3.7
+numpy>=1.24
+pandas>=2.0
+scikit-learn>=1.6
+scipy>=1.9

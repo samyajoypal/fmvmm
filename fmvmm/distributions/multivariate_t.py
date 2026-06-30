@@ -5,6 +5,7 @@ devoloper.
 """
 
 import numpy as np
+from fmvmm.utils.utils_dist import info_opg_from_scores, score_mat_smsn_fd
 import scipy.stats
 from scipy.special import digamma, gammaln
 import scipy
@@ -220,36 +221,19 @@ def fit(X, maxiter = 100, ptol = 1e-6, ftol = 1e-8, return_loglike = False):
     return mu, sigma, nu
 
 def info_mat(X,mu,sigma,nu):
-
-    p =len(mu)
-    g = 1
-    if isinstance(nu, np.ndarray):
-        nu = nu[0]
-    IM = info_matrix_t(
-    X, [1], [mu], [sigma], nu,
-    d_mixedmvST_func=d_mixedmvST,
-    dmvt_ls_func=dmvt_ls,
-    g=g, p=p)
-
-    final_IM = expand_reduced_IM_to_full_no_pi(IM, p, g)
-
-    return final_IM
+    scores = score_mat(X, mu, sigma, nu)
+    information, _, _ = info_opg_from_scores(scores)
+    return information
 
 def score_mat(X,mu,sigma,nu):
-
-    p =len(mu)
-    g = 1
-    if isinstance(nu, np.ndarray):
-        nu = nu[0]
-    _, S = info_matrix_t(
-    X, [1], [mu], [sigma], nu,
-    d_mixedmvST_func=d_mixedmvST,
-    dmvt_ls_func=dmvt_ls,
-    g=g, p=p, return_scores= True)
-
-    # final_IM = expand_reduced_IM_to_full_no_pi(IM, p, g)
-
-    return S
+    return score_mat_smsn_fd(
+        X,
+        mu=mu,
+        sigma=sigma,
+        tail=np.asarray(nu, dtype=float).reshape(-1),
+        tail_transforms=("positive",),
+        logpdf_fun=logpdf,
+    )
 
 
 def expand_reduced_IM_to_full_no_pi(IM_reduced, p, g):

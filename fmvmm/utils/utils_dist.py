@@ -178,8 +178,9 @@ def score_mat_fd_unconstrained(
     ----------
     X : (n,p)
     u_hat : (d,)
-    unpack_fun : callable(u, p=...) -> (lmbda, chi, psi, mu, sigma, gamma)
-    logpdf_fun : callable(X, lmbda, chi, psi, mu, sigma, gamma) -> (n,) logpdf
+    unpack_fun : callable(u, p=...) -> tuple
+        Returns positional parameters accepted by ``logpdf_fun``.
+    logpdf_fun : callable(X, *params) -> (n,) logpdf
     step : base finite-difference step
     rel_step : if True use step * max(1, |u_k|) per coordinate
 
@@ -204,11 +205,11 @@ def score_mat_fd_unconstrained(
         u_plus = u_hat.copy();  u_plus[k] += uk
         u_minus = u_hat.copy(); u_minus[k] -= uk
 
-        l1, c1, p1, mu1, sig1, gam1 = unpack_fun(u_plus, p=p)
-        l0, c0, p0, mu0, sig0, gam0 = unpack_fun(u_minus, p=p)
+        params_plus = unpack_fun(u_plus, p=p)
+        params_minus = unpack_fun(u_minus, p=p)
 
-        lp = logpdf_fun(X, l1, c1, p1, mu1, sig1, gam1)
-        lm = logpdf_fun(X, l0, c0, p0, mu0, sig0, gam0)
+        lp = logpdf_fun(X, *params_plus)
+        lm = logpdf_fun(X, *params_minus)
 
         lp = np.asarray(lp, float).ravel()
         lm = np.asarray(lm, float).ravel()
@@ -328,6 +329,115 @@ def unpack_mvn_unconstrained(u, *, p: int):
         raise ValueError(f"Unpack consumed {idx} entries but u has {u.size}.")
 
     return mu, sigma
+
+
+def _pack_bounded(value: float, kind: str) -> float:
+    value = float(value)
+    if kind == "positive":
+        return float(np.log(max(value, 1e-12)))
+    if kind == "unit":
+        value = float(np.clip(value, 1e-10, 1.0 - 1e-10))
+        return float(np.log(value / (1.0 - value)))
+    if kind == "real":
+        return value
+    raise ValueError(f"Unknown scalar transform {kind!r}.")
+
+
+def _unpack_bounded(value: float, kind: str) -> float:
+    value = float(value)
+    if kind == "positive":
+        return float(np.exp(value))
+    if kind == "unit":
+        if value >= 0:
+            z = np.exp(-value)
+            return float(1.0 / (1.0 + z))
+        z = np.exp(value)
+        return float(z / (1.0 + z))
+    if kind == "real":
+        return value
+    raise ValueError(f"Unknown scalar transform {kind!r}.")
+
+
+def pack_smsn_unconstrained(*, p: int, mu, sigma, shape=None, tail=None,
+                            tail_transforms=()):
+    """Pack SMSN parameters onto a full-rank unconstrained scale."""
+    parts = [np.asarray(mu, dtype=float).reshape(p,)]
+    if shape is not None:
+        parts.append(np.asarray(shape, dtype=float).reshape(p,))
+    diag_raw, off = _pack_spd_cholesky(np.asarray(sigma, dtype=float).reshape(p, p))
+    parts.extend([diag_raw, off])
+
+    tail_array = np.asarray([] if tail is None else tail, dtype=float).reshape(-1)
+    transforms = tuple(tail_transforms)
+    if tail_array.size != len(transforms):
+        raise ValueError("tail and tail_transforms must have the same length.")
+    if tail_array.size:
+        parts.append(np.asarray([
+            _pack_bounded(value, kind)
+            for value, kind in zip(tail_array, transforms)
+        ]))
+    return np.concatenate(parts)
+
+
+def unpack_smsn_unconstrained(u, *, p: int, has_shape: bool,
+                              tail_transforms=()):
+    """Inverse of pack_smsn_unconstrained in distribution call order."""
+    u = np.asarray(u, dtype=float).reshape(-1)
+    idx = 0
+    mu = u[idx:idx + p].copy()
+    idx += p
+    shape = None
+    if has_shape:
+        shape = u[idx:idx + p].copy()
+        idx += p
+    diag_raw = u[idx:idx + p].copy()
+    idx += p
+    n_off = p * (p - 1) // 2
+    off = u[idx:idx + n_off].copy()
+    idx += n_off
+    sigma = _unpack_spd_cholesky(diag_raw, off, p)
+
+    transforms = tuple(tail_transforms)
+    tail = np.asarray([
+        _unpack_bounded(value, kind)
+        for value, kind in zip(u[idx:idx + len(transforms)], transforms)
+    ])
+    idx += len(transforms)
+    if idx != u.size:
+        raise ValueError(f"Unpack consumed {idx} entries but u has {u.size}.")
+
+    if has_shape:
+        return (mu, sigma, shape, tail) if tail.size else (mu, sigma, shape)
+    return (mu, sigma, tail) if tail.size else (mu, sigma)
+
+
+def score_mat_smsn_fd(X, *, mu, sigma, logpdf_fun, shape=None, tail=None,
+                      tail_transforms=(), step=1e-5):
+    """Finite-difference SMSN score matrix on the fitted unconstrained scale."""
+    X = np.asarray(X, dtype=float)
+    p = X.shape[1]
+    u_hat = pack_smsn_unconstrained(
+        p=p,
+        mu=mu,
+        sigma=sigma,
+        shape=shape,
+        tail=tail,
+        tail_transforms=tail_transforms,
+    )
+    return score_mat_fd_unconstrained(
+        X,
+        u_hat=u_hat,
+        unpack_fun=lambda u, *, p: unpack_smsn_unconstrained(
+            u,
+            p=p,
+            has_shape=shape is not None,
+            tail_transforms=tail_transforms,
+        ),
+        logpdf_fun=logpdf_fun,
+        p=p,
+        step=step,
+        rel_step=True,
+    )
 
 
 def score_mat_mvn_fd(X, *, u_hat, logpdf_fun, p: int, step=1e-5):

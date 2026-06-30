@@ -84,7 +84,12 @@ x2 = mvsl.rvs(
 )
 data = np.vstack([x1, x2])
 
-model = fmvmm(n_clusters=2, list_of_dist=["mvn", "mvsl"])
+model = fmvmm(
+    n_clusters=2,
+    list_of_dist=["mvn", "mvsl"],
+    specific_comb=True,
+    assignment_permutations=True,
+)
 model.fit(data)
 
 print(model.best_mixture())
@@ -95,7 +100,13 @@ info_mats, ses = model.get_info_mat()
 
 # Explicit alternatives useful for inference and method comparison.
 soft_info, soft_se, soft_details = model.get_info_mat_soft(return_details=True)
-hard_model = fmvmm(n_clusters=2, list_of_dist=["mvn", "mvsl"], em_type="hard")
+hard_model = fmvmm(
+    n_clusters=2,
+    list_of_dist=["mvn", "mvsl"],
+    specific_comb=True,
+    assignment_permutations=True,
+    em_type="hard",
+)
 hard_model.fit(data)
 hard_info, hard_se, hard_details = hard_model.get_info_mat_hard(return_details=True)
 ```
@@ -116,11 +127,19 @@ params = adapter.parameter_vector(parameterization="user")
 H = fixed_value(params, "pi[0]", 0.5)
 wald_result = wald_test(model, H, parameterization="user")
 
-# Score tests use fitted-null score/information coordinates.
-score_result = score_test(model, ["eta[0]"], parameterization="internal")
+# Score and likelihood-ratio tests require a fitted null model.
+null_model = fmvmm(
+    n_clusters=2,
+    list_of_dist=["mvn", "mvsl"],
+    specific_comb=True,
+    assignment_permutations=True,
+    fixed_pi=[0.5, 0.5],
+)
+null_model.fit(data)
+score_result = score_test(null_model, ["eta[0]"], parameterization="internal")
 
 # LRT is generic; use bootstrap references for non-regular mixture hypotheses.
-lrt_result = lrt(full_model, null_model, df=1)
+lrt_result = lrt(model, null_model, df=1)
 ```
 
 For runnable examples and smoke tests:

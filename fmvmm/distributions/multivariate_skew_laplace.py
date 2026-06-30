@@ -1,5 +1,6 @@
 from fmvmm.mixtures import skewlaplacemix
 import numpy as np
+from fmvmm.utils.utils_dist import info_opg_from_scores, score_mat_smsn_fd
 from fmvmm.mixtures.skewlaplacemix import compute_empirical_info_and_se, compute_empirical_info_se_and_scores
 
 
@@ -186,29 +187,15 @@ def fit(x):
 #     return IM_full_no_pi
 
 def score_mat(X, mu, sigma, gamma):
-    n = X.shape[0]
-    # g=1, pi=[1], responsibilities all ones
-    I_e, SE, S, Cov = compute_empirical_info_se_and_scores(
-        model=None,
-        pi=[1.0],
-        alpha=[[mu, sigma, gamma]],
-        data=X,
-        gamma_res=np.ones((n, 1)),
-        use_model=False,
-        return_cov=True,
+    return score_mat_smsn_fd(
+        X,
+        mu=mu,
+        sigma=sigma,
+        shape=gamma,
+        logpdf_fun=logpdf,
     )
-    # IMPORTANT: for g=1, S contains *no pi-block* (K-1=0), so it's already component-only.
-    return S
 
 def info_mat(X, mu, sigma, gamma):
-    n = X.shape[0]
-    I_e, SE, S, Cov = compute_empirical_info_se_and_scores(
-        model=None,
-        pi=[1.0],
-        alpha=[[mu, sigma, gamma]],
-        data=X,
-        gamma_res=np.ones((n, 1)),
-        use_model=False,
-        return_cov=True,
-    )
-    return I_e
+    scores = score_mat(X, mu, sigma, gamma)
+    information, _, _ = info_opg_from_scores(scores)
+    return information

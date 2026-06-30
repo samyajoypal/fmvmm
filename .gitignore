@@ -3,3 +3,12 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Local environments and IDE metadata
+.venv/
+.idea/
+
+# Package build output
+build/
+dist/
+*.egg-info/

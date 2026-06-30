@@ -842,7 +842,15 @@ def _fit_s_known_m(x: np.ndarray, gamma: np.ndarray, alpha_old,true_m):
 
 
 
-def estimate_alphas(data: np.ndarray, gamma_temp_ar, alpha_temp, method,true_m,true_s,post_m_step):
+def estimate_alphas(
+    data: np.ndarray,
+    gamma_temp_ar,
+    alpha_temp,
+    method,
+    true_m,
+    true_s,
+    post_m_step=None,
+):
     if method == "fixediteration":
         alpha_new = dirichlet_mix_mle(data, gamma_temp_ar, alpha_temp)
     elif method == "meanprecision":

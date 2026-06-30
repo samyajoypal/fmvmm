@@ -13,7 +13,9 @@ from fmvmm.inference.parameters import (
     vech_names,
     vech_upper,
 )
-from fmvmm.utils.utils_dist import pack_gh_family_unconstrained, pack_mvn_unconstrained
+from fmvmm.distributions import multivariate_genhyperbolic as ghypmv
+from fmvmm.utils.utils_dist import pack_mvn_unconstrained
+from fmvmm.utils.utils_dist import pack_smsn_unconstrained
 from fmvmm.utils import utils_dmm
 
 
@@ -81,11 +83,12 @@ def component_theta_and_names(dist_name: str, alpha, component: int,
     if dist_name == "mghp":
         lmbda, chi, psi, mu, sigma, gamma = alpha
         p = len(mu)
-        theta = pack_gh_family_unconstrained(
-            p=p, lmbda=lmbda, chi=chi, psi=psi, mu=mu, sigma=sigma, gamma=gamma,
-            free=("lmbda", "chi", "psi"),
+        theta = ghypmv.pack_gh_alpha_bar_unconstrained(
+            p=p, lmbda=lmbda, alpha_bar=ghypmv.alpha_bar_from_chi_psi(chi, psi),
+            mu=mu, sigma=sigma, gamma=gamma,
+            free=("lmbda", "alpha_bar"),
         )
-        names = ([f"{prefix}.lambda", f"{prefix}.log_chi", f"{prefix}.log_psi"] +
+        names = ([f"{prefix}.lambda", f"{prefix}.log_alpha_bar"] +
                  [f"{prefix}.mu[{i}]" for i in range(p)] +
                  chol_names(f"{prefix}.sigma", p) +
                  [f"{prefix}.gamma[{i}]" for i in range(p)])
@@ -95,11 +98,12 @@ def component_theta_and_names(dist_name: str, alpha, component: int,
         chi, psi, mu, sigma, gamma = alpha
         p = len(mu)
         fixed_lambda = -0.5 if dist_name == "mnig" else (p + 1) / 2.0
-        theta = pack_gh_family_unconstrained(
-            p=p, lmbda=fixed_lambda, chi=chi, psi=psi, mu=mu, sigma=sigma, gamma=gamma,
-            free=("chi", "psi"),
+        theta = ghypmv.pack_gh_alpha_bar_unconstrained(
+            p=p, lmbda=fixed_lambda, alpha_bar=ghypmv.alpha_bar_from_chi_psi(chi, psi),
+            mu=mu, sigma=sigma, gamma=gamma,
+            free=("alpha_bar",),
         )
-        names = ([f"{prefix}.log_chi", f"{prefix}.log_psi"] +
+        names = ([f"{prefix}.log_alpha_bar"] +
                  [f"{prefix}.mu[{i}]" for i in range(p)] +
                  chol_names(f"{prefix}.sigma", p) +
                  [f"{prefix}.gamma[{i}]" for i in range(p)])
@@ -108,11 +112,10 @@ def component_theta_and_names(dist_name: str, alpha, component: int,
     if dist_name == "mvvg":
         lmbda, psi, mu, sigma, gamma = alpha
         p = len(mu)
-        theta = pack_gh_family_unconstrained(
-            p=p, lmbda=lmbda, chi=0.0, psi=psi, mu=mu, sigma=sigma, gamma=gamma,
-            free=("lmbda", "psi"),
+        theta = ghypmv.pack_vg_unconstrained(
+            p=p, lmbda=lmbda, mu=mu, sigma=sigma, gamma=gamma,
         )
-        names = ([f"{prefix}.lambda", f"{prefix}.log_psi"] +
+        names = ([f"{prefix}.log_lambda"] +
                  [f"{prefix}.mu[{i}]" for i in range(p)] +
                  chol_names(f"{prefix}.sigma", p) +
                  [f"{prefix}.gamma[{i}]" for i in range(p)])
@@ -121,11 +124,10 @@ def component_theta_and_names(dist_name: str, alpha, component: int,
     if dist_name == "mgst":
         lmbda, chi, mu, sigma, gamma = alpha
         p = len(mu)
-        theta = pack_gh_family_unconstrained(
-            p=p, lmbda=lmbda, chi=chi, psi=0.0, mu=mu, sigma=sigma, gamma=gamma,
-            free=("lmbda", "chi"),
+        theta = ghypmv.pack_gst_unconstrained(
+            p=p, lmbda=lmbda, mu=mu, sigma=sigma, gamma=gamma,
         )
-        names = ([f"{prefix}.lambda", f"{prefix}.log_chi"] +
+        names = ([f"{prefix}.log_minus_lambda_minus_one"] +
                  [f"{prefix}.mu[{i}]" for i in range(p)] +
                  chol_names(f"{prefix}.sigma", p) +
                  [f"{prefix}.gamma[{i}]" for i in range(p)])
@@ -134,34 +136,60 @@ def component_theta_and_names(dist_name: str, alpha, component: int,
     if dist_name in {"mvsn", "mvst", "msnc", "mssl"}:
         mu, sigma, shape, *rest = alpha
         p = len(mu)
-        theta = np.concatenate([np.asarray(mu, float), np.asarray(shape, float),
-                                vech_upper(sigma), _flatten(rest)])
-        nu_flag = 0
-        if rest:
-            nu_flag = 2 if np.asarray(rest[0]).size == 2 else 1
-        return theta, _smsn_names(prefix, p, has_shape=True, has_nu=nu_flag)
+        tail = _flatten(rest)
+        tail_transforms = {
+            "mvsn": (),
+            "mvst": ("positive",),
+            "mssl": ("positive",),
+            "msnc": ("unit", "unit"),
+        }[dist_name]
+        theta = pack_smsn_unconstrained(
+            p=p,
+            mu=mu,
+            sigma=sigma,
+            shape=shape,
+            tail=tail,
+            tail_transforms=tail_transforms,
+        )
+        names = (
+            [f"{prefix}.mu[{i}]" for i in range(p)]
+            + [f"{prefix}.lambda[{i}]" for i in range(p)]
+            + chol_names(f"{prefix}.sigma", p)
+        )
+        if dist_name in {"mvst", "mssl"}:
+            names.append(f"{prefix}.log_nu")
+        elif dist_name == "msnc":
+            names.extend([f"{prefix}.logit_nu[0]", f"{prefix}.logit_nu[1]"])
+        return theta, names
 
     if dist_name in {"mvt", "msl"}:
         mu, sigma, nu = alpha
         p = len(mu)
-        slash_lambda = dist_name == "msl"
-        if slash_lambda:
-            theta = np.concatenate([np.asarray(mu, float), np.zeros(p), vech_upper(sigma),
-                                    np.array([_as_scalar(nu)])])
-            names = _smsn_names(prefix, p, has_shape=True, has_nu=1, slash_lambda=True)
-        else:
-            theta = np.concatenate([np.asarray(mu, float), vech_upper(sigma),
-                                    np.array([_as_scalar(nu)])])
-            names = _smsn_names(prefix, p, has_shape=False, has_nu=1)
+        theta = pack_smsn_unconstrained(
+            p=p,
+            mu=mu,
+            sigma=sigma,
+            tail=np.asarray(nu, dtype=float).reshape(-1),
+            tail_transforms=("positive",),
+        )
+        names = (
+            [f"{prefix}.mu[{i}]" for i in range(p)]
+            + chol_names(f"{prefix}.sigma", p)
+            + [f"{prefix}.log_nu"]
+        )
         return theta, names
 
     if dist_name == "mvsl":
         mu, sigma, gamma = alpha
         p = len(mu)
-        theta = np.concatenate([np.asarray(mu, float), vech_upper(sigma), np.asarray(gamma, float)])
-        names = ([f"{prefix}.mu[{i}]" for i in range(p)] +
-                 vech_names(f"{prefix}.sigma", p) +
-                 [f"{prefix}.gamma[{i}]" for i in range(p)])
+        theta = pack_smsn_unconstrained(
+            p=p, mu=mu, sigma=sigma, shape=gamma
+        )
+        names = (
+            [f"{prefix}.mu[{i}]" for i in range(p)]
+            + [f"{prefix}.gamma[{i}]" for i in range(p)]
+            + chol_names(f"{prefix}.sigma", p)
+        )
         return theta, names
 
     theta = _flatten(alpha)
@@ -200,7 +228,9 @@ class FMVMMAdapter(InferenceAdapter):
 
     def _idx(self):
         if self.candidate == "best":
-            return int(np.argmin(self.model.list_bic))
+            return int(getattr(
+                self.model, "paper_best_index", np.argmin(self.model.list_bic)
+            ))
         return int(self.candidate)
 
     def _theta_names(self, parameterization):

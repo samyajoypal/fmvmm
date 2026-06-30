@@ -5,6 +5,7 @@ devoloper.
 """
 
 import numpy as np
+from fmvmm.utils.utils_dist import info_opg_from_scores, score_mat_smsn_fd
 from scipy.stats import (multivariate_normal as mvn, norm)
 from scipy.stats._multivariate import _squeeze_output
 import scipy
@@ -331,38 +332,18 @@ def fit(x, maxiter = 100, ptol = 1e-6, ftol = 1e-10, eps=0.9, return_loglike = F
     return mu1, omega1, lmbda0
 
 def info_mat(X,mu,sigma,lmbda):
-
-    p =len(mu)
-    g = 1
-
-    IM = info_matrix_skewnormal(
-    X, [1], [mu], [sigma], [lmbda],
-    d_mixedmvSN_func=d_mixedmvSN,
-    dmvSN_func=dmvSN,
-    g=g,
-    p=p
-)
-
-    final_IM = expand_reduced_IM_to_full_no_pi(IM, p, g)
-
-    return final_IM
+    scores = score_mat(X, mu, sigma, lmbda)
+    information, _, _ = info_opg_from_scores(scores)
+    return information
 
 def score_mat(X,mu,sigma,lmbda):
-
-    p =len(mu)
-    g = 1
-
-    _, S = info_matrix_skewnormal(
-    X, [1], [mu], [sigma], [lmbda],
-    d_mixedmvSN_func=d_mixedmvSN,
-    dmvSN_func=dmvSN,
-    g=g,
-    p=p, return_scores= True
-)
-
-    # final_IM = expand_reduced_IM_to_full_no_pi(IM, p, g)
-
-    return S
+    return score_mat_smsn_fd(
+        X,
+        mu=mu,
+        sigma=sigma,
+        shape=lmbda,
+        logpdf_fun=logpdf,
+    )
 
 def expand_reduced_IM_to_full_no_pi(IM_reduced, p, g):
     """

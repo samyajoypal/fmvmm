@@ -85,7 +85,7 @@ def loglike(x, chi, psi, mu, sigma, gamma):
 def total_params(chi, psi, mu, sigma, gamma):
     p = len(mu)
 
-    return 2 + 2*p + (p*(p+1)/2)
+    return 1 + 2*p + (p*(p+1)/2)
 
 def rvs(chi, psi, mu, sigma, gamma, size):
     """
@@ -222,42 +222,14 @@ def fit_weighted(x, weights, **kwargs):
 
 def score_mat(x, chi, psi, mu, sigma, gamma, step=1e-5):
     """
-    Per-observation score matrix wrt unconstrained vector u.
-    NIG: lmbda fixed at -0.5, chi/psi free.
+    Per-observation score matrix wrt the fitted NIG coordinates:
+    log(alpha_bar), mu, Cholesky(Sigma), gamma.
     Returns S with shape (n, d_u).
     """
-    x = np.asarray(x, float)
-    p = x.shape[1]
-    lmbda_fixed = -0.5
-
-    # pack constrained -> unconstrained (free: chi, psi; lmbda fixed)
-    u_hat = pack_gh_family_unconstrained(
-        p=p,
-        lmbda=lmbda_fixed, chi=chi, psi=psi,
-        mu=mu, sigma=sigma, gamma=gamma,
-        free=("chi", "psi"),
+    return ghypmv.score_mat_alpha_bar(
+        x, -0.5, ghypmv.alpha_bar_from_chi_psi(chi, psi), mu, sigma, gamma,
+        free=("alpha_bar",), fixed={"lmbda": -0.5}, step=step,
     )
-
-    def _unpack(u, *, p):
-        return unpack_gh_family_unconstrained(
-            u, p=p,
-            fixed={"lmbda": lmbda_fixed},
-            free=("chi", "psi"),
-        )
-
-    # logpdf_fun must accept full GH order (including lmbda)
-    def _logpdf_fun(X, lmbda_, chi_, psi_, mu_, sigma_, gamma_):
-        return ghypmv.logpdf(X, lmbda_fixed, chi_, psi_, mu_, sigma_, gamma_)
-
-    S = score_mat_fd_unconstrained(
-        x,
-        u_hat=u_hat,
-        unpack_fun=_unpack,
-        logpdf_fun=_logpdf_fun,
-        p=p,
-        step=step,
-    )
-    return S
 
 
 def info_mat(x, chi, psi, mu, sigma, gamma, step=1e-5, ridge=1e-8):

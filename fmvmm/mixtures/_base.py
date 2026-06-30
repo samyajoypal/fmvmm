@@ -4,6 +4,26 @@ import pandas as pd
 from scipy.special import logsumexp
 from abc import ABCMeta, abstractmethod
 from fmvmm.utils import utils_mixture
+
+
+def _blend_parameter(old, new, fraction):
+    """Convexly damp nested numeric parameter structures."""
+    if isinstance(old, tuple):
+        return tuple(
+            _blend_parameter(old_item, new_item, fraction)
+            for old_item, new_item in zip(old, new)
+        )
+    if isinstance(old, list):
+        return [
+            _blend_parameter(old_item, new_item, fraction)
+            for old_item, new_item in zip(old, new)
+        ]
+    old_array = np.asarray(old, dtype=float)
+    new_array = np.asarray(new, dtype=float)
+    blended = old_array + fraction * (new_array - old_array)
+    if np.asarray(old).shape == ():
+        return float(blended)
+    return blended
 # import numpy
 
 class BaseMixture(metaclass=ABCMeta):
@@ -72,6 +92,7 @@ class BaseMixture(metaclass=ABCMeta):
         self.p = X.shape[1]
         self.n = X.shape[0]
         self.log_likelihoods=[]
+        post_m_step = kwargs.pop("post_m_step", None)
         stop=False
         while stop!=True:
             log_likelihood_old, log_gamma_temp = self._e_step(
@@ -82,11 +103,28 @@ class BaseMixture(metaclass=ABCMeta):
             self.alpha_temp = alpha_temp
             self.pi_temp = pi_temp
             pi_new,alpha_new=self._m_step(gamma_temp_ar, X, estimate_alphas_function,dist_comb, **kwargs)
-            post_m_step = kwargs.get("post_m_step", None)
             if post_m_step is not None:
                 pi_new, alpha_new = post_m_step(pi_new, alpha_new)
             log_likelihood_new, log_gamma_new = self._e_step(
                 X, alpha_new, pi_new,dist_comb)
+            if self.EM_type == "Soft" and log_likelihood_new < log_likelihood_old - 1e-8:
+                accepted = False
+                for fraction in (0.5, 0.25, 0.125, 0.0625, 0.03125):
+                    pi_try = _blend_parameter(pi_temp, pi_new, fraction)
+                    pi_try = np.asarray(pi_try, dtype=float)
+                    pi_try = pi_try / pi_try.sum()
+                    alpha_try = _blend_parameter(alpha_temp, alpha_new, fraction)
+                    ll_try, log_gamma_try = self._e_step(
+                        X, alpha_try, pi_try, dist_comb
+                    )
+                    if ll_try >= log_likelihood_old - 1e-8:
+                        pi_new, alpha_new = pi_try, alpha_try
+                        log_likelihood_new, log_gamma_new = ll_try, log_gamma_try
+                        accepted = True
+                        break
+                if not accepted:
+                    pi_new, alpha_new = pi_temp, alpha_temp
+                    log_likelihood_new, log_gamma_new = log_likelihood_old, log_gamma_temp
             self.log_likelihoods.append(log_likelihood_new)
             # print("pi_new", pi_new)
             # print("alpha_new", alpha_new)

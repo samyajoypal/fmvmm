@@ -1,5 +1,7 @@
-from scipy.optimize import approx_fprime
+from scipy.optimize import approx_fprime, minimize
 import numpy as np
+import os
+from concurrent.futures import ProcessPoolExecutor
 from fmvmm.utils.utils_fmm import (fmm_kmeans_init,fmm_gmm_init, fmm_loglikelihood, fmm_responsibilities,
                              fmm_pi_estimate, fmm_estimate_alphas, fmm_aic, fmm_bic, fmm_icl)
 
@@ -47,6 +49,12 @@ from fmvmm.mixtures.slashmix_smsn import (
 )
 from fmvmm.mixtures.skewlaplacemix import estimate_alphas_skewlaplace
 from fmvmm.mixsmsn.dens import dmvt_ls, d_mixedmvST
+from fmvmm.utils.utils_dist import (
+    pack_mvn_unconstrained,
+    pack_smsn_unconstrained,
+    unpack_mvn_unconstrained,
+    unpack_smsn_unconstrained,
+)
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -174,7 +182,89 @@ def _soft_update_gh_family(dist_name, X, weights, alpha_prev, gh_mstep_kwargs):
     raise NotImplementedError(f"GH-family soft M-step is not available for {dist_name}.")
 
 
-def _soft_update_one_component(dist_name, X, weights, alpha_prev, gh_mstep_kwargs=None):
+def _smsn_unconstrained_spec(dist_name, alpha):
+    if dist_name in {"mvsn", "mvst", "mssl", "msnc"}:
+        mu, sigma, shape, *tail_parts = alpha
+        tail = np.concatenate([
+            np.asarray(part, dtype=float).reshape(-1) for part in tail_parts
+        ]) if tail_parts else np.array([], dtype=float)
+        transforms = {
+            "mvsn": (),
+            "mvst": ("positive",),
+            "mssl": ("positive",),
+            "msnc": ("unit", "unit"),
+        }[dist_name]
+        has_shape = True
+    elif dist_name in {"mvt", "msl"}:
+        mu, sigma, tail_value = alpha
+        shape = None
+        tail = np.asarray(tail_value, dtype=float).reshape(-1)
+        transforms = ("positive",)
+        has_shape = False
+    else:
+        raise NotImplementedError(f"No unconstrained SMSN specification for {dist_name}.")
+
+    p = len(mu)
+    u = pack_smsn_unconstrained(
+        p=p,
+        mu=mu,
+        sigma=sigma,
+        shape=shape,
+        tail=tail,
+        tail_transforms=transforms,
+    )
+
+    def unpack(value):
+        return unpack_smsn_unconstrained(
+            value,
+            p=p,
+            has_shape=has_shape,
+            tail_transforms=transforms,
+        )
+
+    return u, unpack
+
+
+def _soft_update_smsn_family(dist_name, X, weights, alpha_prev,
+                             smsn_mstep_kwargs=None):
+    """Numerically maximize the weighted component log-likelihood."""
+    smsn_mstep_kwargs = {} if smsn_mstep_kwargs is None else dict(smsn_mstep_kwargs)
+    module = dist_map[dist_name]
+    u0, unpack = _smsn_unconstrained_spec(dist_name, alpha_prev)
+    weights = np.asarray(weights, dtype=float).reshape(-1)
+
+    def objective(u):
+        try:
+            log_density = np.asarray(module.logpdf(X, *unpack(u)), dtype=float).reshape(-1)
+        except Exception:
+            return 1e100
+        if log_density.size != X.shape[0] or not np.all(np.isfinite(log_density)):
+            return 1e100
+        value = -float(np.dot(weights, log_density))
+        return value if np.isfinite(value) else 1e100
+
+    q0 = objective(u0)
+    options = {
+        "maxiter": int(smsn_mstep_kwargs.pop("maxiter", 80)),
+        "ftol": float(smsn_mstep_kwargs.pop("ftol", 1e-9)),
+        "gtol": float(smsn_mstep_kwargs.pop("gtol", 1e-5)),
+        "maxls": int(smsn_mstep_kwargs.pop("maxls", 30)),
+    }
+    options.update(smsn_mstep_kwargs.pop("options", {}))
+    result = minimize(
+        objective,
+        u0,
+        method=smsn_mstep_kwargs.pop("method", "L-BFGS-B"),
+        options=options,
+        **smsn_mstep_kwargs,
+    )
+    if np.isfinite(result.fun) and result.fun <= q0 + 1e-8:
+        return unpack(result.x)
+    return alpha_prev
+
+
+def _soft_update_one_component(dist_name, X, weights, alpha_prev, gh_mstep_kwargs=None,
+                               smsn_mstep_kwargs=None):
     gamma = np.asarray(weights, dtype=float).reshape(-1, 1)
     if np.sum(gamma) <= 1e-12:
         return alpha_prev
@@ -191,6 +281,15 @@ def _soft_update_one_component(dist_name, X, weights, alpha_prev, gh_mstep_kwarg
 
     if dist_name == "mvn":
         return _weighted_mvn_update(X, gamma[:, 0], alpha_prev)
+
+    if dist_name in {"mvsn", "mvst", "msnc", "mssl", "mvt", "msl"}:
+        return _soft_update_smsn_family(
+            dist_name,
+            X,
+            gamma[:, 0],
+            alpha_prev,
+            smsn_mstep_kwargs=smsn_mstep_kwargs,
+        )
 
     if dist_name == "mvsn":
         return estimate_alphas_skewnormal(
@@ -254,6 +353,7 @@ def fmm_estimate_alphas_soft(X, gamma_matrix, alpha_prev, soft_dist_comb=None, *
     if soft_dist_comb is None:
         raise ValueError("soft_dist_comb must be provided for non-identical soft EM.")
     gh_mstep_kwargs = kwargs.get("gh_mstep_kwargs", {})
+    smsn_mstep_kwargs = kwargs.get("smsn_mstep_kwargs", {})
     alpha_new = []
     for j, dist_module in enumerate(soft_dist_comb):
         dist_name = dist_name_by_module.get(dist_module)
@@ -263,7 +363,8 @@ def fmm_estimate_alphas_soft(X, gamma_matrix, alpha_prev, soft_dist_comb=None, *
             alpha_new.append(
                 _soft_update_one_component(
                     dist_name, X, gamma_matrix[:, j], alpha_prev[j],
-                    gh_mstep_kwargs=gh_mstep_kwargs
+                    gh_mstep_kwargs=gh_mstep_kwargs,
+                    smsn_mstep_kwargs=smsn_mstep_kwargs,
                 )
             )
         except Exception:
@@ -541,6 +642,182 @@ def safe_component_score_matrix(dist_module, X, params):
     return np.nan_to_num(S, nan=0.0, posinf=0.0, neginf=0.0)
 
 
+def _component_unconstrained_spec(dist_module, params, p):
+    """Return fitted internal coordinates and their inverse map."""
+    dist_name = dist_name_by_module[dist_module]
+
+    if dist_name == "mvn":
+        mu, sigma = params
+        u = pack_mvn_unconstrained(p=p, mu=mu, sigma=sigma)
+        return u, lambda value: unpack_mvn_unconstrained(value, p=p)
+
+    if dist_name == "mghp":
+        lmbda, chi, psi, mu, sigma, gamma = params
+        u = mghp.pack_gh_alpha_bar_unconstrained(
+            p=p,
+            lmbda=lmbda,
+            alpha_bar=mghp.alpha_bar_from_chi_psi(chi, psi),
+            mu=mu,
+            sigma=sigma,
+            gamma=gamma,
+            free=("lmbda", "alpha_bar"),
+        )
+        return u, lambda value: mghp.unpack_gh_alpha_bar_unconstrained(
+            value, p=p, fixed={}, free=("lmbda", "alpha_bar")
+        )
+
+    if dist_name in {"mnig", "mvhb"}:
+        chi, psi, mu, sigma, gamma = params
+        fixed_lambda = -0.5 if dist_name == "mnig" else (p + 1.0) / 2.0
+        u = mghp.pack_gh_alpha_bar_unconstrained(
+            p=p,
+            lmbda=fixed_lambda,
+            alpha_bar=mghp.alpha_bar_from_chi_psi(chi, psi),
+            mu=mu,
+            sigma=sigma,
+            gamma=gamma,
+            free=("alpha_bar",),
+        )
+        return u, lambda value: mghp.unpack_gh_alpha_bar_unconstrained(
+            value,
+            p=p,
+            fixed={"lmbda": fixed_lambda},
+            free=("alpha_bar",),
+        )[1:]
+
+    if dist_name == "mvvg":
+        lmbda, _psi, mu, sigma, gamma = params
+        u = mghp.pack_vg_unconstrained(
+            p=p, lmbda=lmbda, mu=mu, sigma=sigma, gamma=gamma
+        )
+
+        def unpack_vg(value):
+            lmbda_new, _chi, psi_new, mu_new, sigma_new, gamma_new = (
+                mghp.unpack_vg_unconstrained(value, p=p)
+            )
+            return lmbda_new, psi_new, mu_new, sigma_new, gamma_new
+
+        return u, unpack_vg
+
+    if dist_name == "mgst":
+        lmbda, _chi, mu, sigma, gamma = params
+        u = mghp.pack_gst_unconstrained(
+            p=p, lmbda=lmbda, mu=mu, sigma=sigma, gamma=gamma
+        )
+
+        def unpack_gst(value):
+            lmbda_new, chi_new, _psi, mu_new, sigma_new, gamma_new = (
+                mghp.unpack_gst_unconstrained(value, p=p)
+            )
+            return lmbda_new, chi_new, mu_new, sigma_new, gamma_new
+
+        return u, unpack_gst
+
+    if dist_name in {"mvsn", "mvst", "msnc", "mssl", "mvt", "msl"}:
+        return _smsn_unconstrained_spec(dist_name, params)
+
+    if dist_name == "mvsl":
+        mu, sigma, gamma = params
+        u = pack_smsn_unconstrained(
+            p=p, mu=mu, sigma=sigma, shape=gamma
+        )
+        return u, lambda value: unpack_smsn_unconstrained(
+            value, p=p, has_shape=True
+        )
+
+    raise NotImplementedError(
+        f"No fitted internal parameterization for {dist_name}."
+    )
+
+
+def _negative_weighted_loglik_hessian(dist_module, X, params, weights,
+                                       step=1e-4):
+    """Numerical negative Hessian of a weighted component log-likelihood."""
+    X = np.asarray(X, dtype=float)
+    weights = np.asarray(weights, dtype=float).reshape(-1)
+    p = X.shape[1]
+    u0, unpack = _component_unconstrained_spec(dist_module, params, p)
+    u0 = np.asarray(u0, dtype=float).reshape(-1)
+    d = u0.size
+    h = float(step) * np.maximum(1.0, np.abs(u0))
+
+    def loglike(value):
+        density = np.asarray(
+            dist_module.logpdf(X, *unpack(value)), dtype=float
+        ).reshape(-1)
+        if density.size != X.shape[0] or not np.all(np.isfinite(density)):
+            raise FloatingPointError(
+                f"Non-finite log density while differentiating {dist_module.__name__}."
+            )
+        return float(np.dot(weights, density))
+
+    f0 = loglike(u0)
+    hessian = np.zeros((d, d), dtype=float)
+    for a in range(d):
+        plus = u0.copy()
+        minus = u0.copy()
+        plus[a] += h[a]
+        minus[a] -= h[a]
+        hessian[a, a] = (loglike(plus) - 2.0 * f0 + loglike(minus)) / (h[a] ** 2)
+        for b in range(a):
+            pp = u0.copy()
+            pm = u0.copy()
+            mp = u0.copy()
+            mm = u0.copy()
+            pp[a] += h[a]; pp[b] += h[b]
+            pm[a] += h[a]; pm[b] -= h[b]
+            mp[a] -= h[a]; mp[b] += h[b]
+            mm[a] -= h[a]; mm[b] -= h[b]
+            value = (
+                loglike(pp) - loglike(pm) - loglike(mp) + loglike(mm)
+            ) / (4.0 * h[a] * h[b])
+            hessian[a, b] = value
+            hessian[b, a] = value
+    return -0.5 * (hessian + hessian.T)
+
+
+def complete_information_fmvmm(X, pi, alpha, dist_comb, tau,
+                               hessian_step=1e-4):
+    """Conditional expectation of negative complete-data Hessians."""
+    X = np.asarray(X, dtype=float)
+    pi = np.asarray(pi, dtype=float)
+    tau = np.asarray(tau, dtype=float)
+    n, k = tau.shape
+    eta_dim = max(k - 1, 0)
+    param_dims = [
+        safe_component_score_matrix(module, X[:1], params).shape[1]
+        for module, params in zip(dist_comb, alpha)
+    ]
+    total_dim = eta_dim + sum(param_dims)
+    information = np.zeros((total_dim, total_dim), dtype=float)
+
+    if eta_dim:
+        p_eta = pi[:eta_dim]
+        information[:eta_dim, :eta_dim] = n * (
+            np.diag(p_eta) - np.outer(p_eta, p_eta)
+        )
+
+    cursor = eta_dim
+    for component, (module, params, dim) in enumerate(
+        zip(dist_comb, alpha, param_dims)
+    ):
+        block = _negative_weighted_loglik_hessian(
+            module,
+            X,
+            params,
+            tau[:, component],
+            step=hessian_step,
+        )
+        if block.shape != (dim, dim):
+            raise ValueError(
+                f"Hessian/score dimension mismatch for {module.__name__}: "
+                f"{block.shape} versus {(dim, dim)}."
+            )
+        information[cursor:cursor + dim, cursor:cursor + dim] = block
+        cursor += dim
+    return 0.5 * (information + information.T), param_dims
+
+
 def observed_score_matrix_fmvmm(X, pi, alpha, dist_comb, tau):
     """
     Full observed-data score matrix for a non-identical finite mixture.
@@ -580,13 +857,10 @@ def observed_score_matrix_fmvmm(X, pi, alpha, dist_comb, tau):
 
 def louis_score_decomposition_fmvmm(X, pi, alpha, dist_comb, tau):
     """
-    Louis decomposition using complete-data score outer products.
+    Exact Louis decomposition with numerically differentiated component Hessians.
 
-    This computes, observation by observation,
-      I_observed(OPG) = E[S_c S_c' | x] - Var[S_c | x]
-                      = S_obs S_obs'
-    and returns all three summed matrices. It includes the membership-variance
-    cross-blocks that the old block-diagonal FMVMM implementation missed.
+    I_obs = E[-H_c | X] - Var[S_c | X]. The second term includes all
+    membership-uncertainty cross-blocks.
     """
     S_obs, raw_component_scores, param_dims = observed_score_matrix_fmvmm(
         X, pi, alpha, dist_comb, tau
@@ -623,7 +897,15 @@ def louis_score_decomposition_fmvmm(X, pi, alpha, dist_comb, tau):
     missing = complete_opg - observed_opg
     missing = 0.5 * (missing + missing.T)
 
-    return observed_opg, complete_opg, missing, S_obs, param_dims
+    complete_information, hessian_dims = complete_information_fmvmm(
+        X, pi, alpha, dist_comb, tau
+    )
+    if hessian_dims != param_dims:
+        raise ValueError("Louis Hessian and score parameterizations do not match.")
+    observed_information = complete_information - missing
+    observed_information = 0.5 * (observed_information + observed_information.T)
+
+    return observed_information, complete_information, missing, S_obs, param_dims
 
 
 def classification_information_fmvmm(X, pi, alpha, dist_comb, labels):
@@ -632,8 +914,8 @@ def classification_information_fmvmm(X, pi, alpha, dist_comb, labels):
 
     This treats component labels as known. The missing-information term from
     uncertain membership is therefore zero. The eta block is the multinomial
-    complete-data information, and component blocks are OPG component
-    information computed only on hard-assigned observations.
+    complete-data information. Component blocks use numerical negative
+    Hessians on hard-assigned observations.
 
     Parameter order is the same internal identifiable order used by the soft
     method:
@@ -649,30 +931,11 @@ def classification_information_fmvmm(X, pi, alpha, dist_comb, labels):
     if labels.shape[0] != n:
         raise ValueError("labels must have one entry per observation.")
 
-    component_scores = []
-    param_dims = []
-    for j, dist_module in enumerate(dist_comb):
-        S_all = safe_component_score_matrix(dist_module, X, alpha[j])
-        S_j = S_all[labels == j]
-        component_scores.append(S_j)
-        param_dims.append(S_all.shape[1])
-
-    total_dim = eta_dim + sum(param_dims)
-    I = np.zeros((total_dim, total_dim), dtype=float)
-
-    if eta_dim:
-        I_eta, _, _ = pi_info_constrained(pi, n)
-        I[:eta_dim, :eta_dim] = I_eta
-
-    cursor = eta_dim
-    for S_j, d_j in zip(component_scores, param_dims):
-        if S_j.shape[0] > 0:
-            block = S_j.T @ S_j
-            I[cursor:cursor + d_j, cursor:cursor + d_j] = 0.5 * (block + block.T)
-        cursor += d_j
-
     tau_hard = np.zeros((n, k), dtype=float)
     tau_hard[np.arange(n), labels] = 1.0
+    I, param_dims = complete_information_fmvmm(
+        X, pi, alpha, dist_comb, tau_hard
+    )
     S_complete, _, _ = observed_score_matrix_fmvmm(X, pi, alpha, dist_comb, tau_hard)
     missing = np.zeros_like(I)
 
@@ -828,10 +1091,139 @@ def get_dist_names(dist_comb):
     return [str(c.__name__) for c in dist_comb]
 
 
+def _dist_names_from_comb(dist_comb):
+    return [dist_name_by_module.get(module, str(module.__name__).split(".")[-1])
+            for module in dist_comb]
+
+
+def _dist_comb_from_names(dist_names):
+    return tuple(dist_map[name] for name in dist_names)
+
+
+def _dist_combs_from_candidate_combinations(candidate_combinations, k):
+    dist_combs = []
+    for candidate in candidate_combinations:
+        if len(candidate) != k:
+            raise ValueError(
+                f"Each candidate combination must have length {k}; got {candidate!r}."
+            )
+        dist_combs.append(tuple(dist_map[name] if isinstance(name, str) else name
+                               for name in candidate))
+    return dist_combs
+
+
+def _expand_assignment_permutations(dist_combs):
+    """Return every distinct family-to-component assignment once."""
+    expanded = []
+    seen = set()
+    for dist_comb in dist_combs:
+        for assignment in itertools.permutations(dist_comb):
+            if assignment in seen:
+                continue
+            seen.add(assignment)
+            expanded.append(assignment)
+    return expanded
+
+
+def _assignment_equivalence_key(dist_comb):
+    """Identify ordered candidates representing the same unlabeled mixture."""
+    return tuple(sorted(_dist_names_from_comb(dist_comb)))
+
+
+def _mu_index_for_dist(dist_name):
+    if dist_name in {"mvn", "mvt", "mvsl", "mvsn", "mvst", "msnc", "mssl", "msl"}:
+        return 0
+    if dist_name == "mghp":
+        return 3
+    if dist_name in {"mnig", "mvhb"}:
+        return 2
+    if dist_name == "mvvg":
+        return 2
+    if dist_name == "mgst":
+        return 2
+    return None
+
+
+def _apply_fixed_mu(alpha, dist_comb, fixed_mu):
+    if not fixed_mu:
+        return alpha
+    alpha_new = list(alpha)
+    for item in fixed_mu:
+        component = int(item["component"])
+        coordinate = int(item.get("coordinate", 0))
+        value = float(item["value"])
+        if component < 0 or component >= len(alpha_new):
+            raise ValueError(f"fixed_mu component {component} is out of range.")
+        dist_name = dist_name_by_module.get(dist_comb[component])
+        mu_idx = _mu_index_for_dist(dist_name)
+        if mu_idx is None:
+            raise NotImplementedError(f"Cannot fix mu for distribution {dist_name}.")
+        params = list(alpha_new[component])
+        mu = np.asarray(params[mu_idx], dtype=float).copy()
+        mu[coordinate] = value
+        params[mu_idx] = mu
+        alpha_new[component] = tuple(params)
+    return alpha_new
+
+
+def _fit_fmvmm_candidate_worker(args):
+    """
+    Fit one FMVMM candidate in a separate process.
+
+    The worker constructs a one-candidate FMVMM object. This avoids sharing the
+    mutable EM state stored on the main object while preserving the exact fitting
+    path used by sequential candidate fits.
+    """
+    (
+        data, n_clusters, dist_names, tol, initialization, print_log_likelihood,
+        max_iter, verbose, debug, em_type, gh_mstep_kwargs, smsn_mstep_kwargs, init_fit_kwargs,
+        fixed_pi, fixed_mu,
+    ) = args
+
+    candidate = fmvmm(
+        n_clusters=n_clusters,
+        tol=tol,
+        list_of_dist=list(dist_names),
+        specific_comb=True,
+        initialization=initialization,
+        print_log_likelihood=print_log_likelihood,
+        max_iter=max_iter,
+        verbose=verbose,
+        debug=debug,
+        em_type=em_type,
+        gh_mstep_kwargs=gh_mstep_kwargs,
+        smsn_mstep_kwargs=smsn_mstep_kwargs,
+        init_fit_kwargs=init_fit_kwargs,
+        n_jobs=1,
+        fixed_pi=fixed_pi,
+        fixed_mu=fixed_mu,
+    )
+    candidate.fit(data)
+    if len(candidate.worked_dist) == 0:
+        return {
+            "worked": False,
+            "dist_names": list(dist_names),
+            "error": "No candidate fit completed successfully.",
+        }
+    return {
+        "worked": True,
+        "dist_names": list(dist_names),
+        "aic": candidate.list_aic[0],
+        "bic": candidate.list_bic[0],
+        "icl": candidate.list_icl[0],
+        "pi": candidate.list_pi[0],
+        "alpha": candidate.list_alpha[0],
+        "cluster": candidate.list_cluster[0],
+        "log_likelihood": candidate.list_log_likelihood[0],
+        "gamma_matrix": candidate.list_gamma_matrix[0],
+        "all_log_likelihood": candidate.list_all_log_likelihood[0],
+    }
+
+
 
 
 class fmvmm(BaseMixture):
-    def __init__(self,n_clusters,tol=0.0001, list_of_dist=all_dist,specific_comb=False,initialization="kmeans",print_log_likelihood=False,max_iter=25, verbose=True, debug = False, em_type="soft", gh_mstep_kwargs=None, init_fit_kwargs=None):
+    def __init__(self,n_clusters,tol=0.0001, list_of_dist=all_dist,specific_comb=False,initialization="kmeans",print_log_likelihood=False,max_iter=25, verbose=True, debug = False, em_type="soft", gh_mstep_kwargs=None, smsn_mstep_kwargs=None, init_fit_kwargs=None, n_jobs=1, candidate_combinations=None, fixed_pi=None, fixed_mu=None, assignment_permutations=False):
         em_type_normalized = em_type.lower()
         if em_type_normalized not in ("hard", "soft"):
             raise ValueError("em_type must be either 'hard' or 'soft'.")
@@ -843,17 +1235,50 @@ class fmvmm(BaseMixture):
         self.dist_variables = [dist_map[list_of_dist[j]]
                                for j in range(len(list_of_dist))]
         self.specific_comb=specific_comb
-        if self.specific_comb==True:
+        if candidate_combinations is not None:
+            self.dist_combs = _dist_combs_from_candidate_combinations(
+                candidate_combinations, self.k)
+        elif self.specific_comb==True:
             self.dist_combs = list(
                 itertools.combinations(self.dist_variables, self.k))
         else:
             self.dist_combs = list(
                 itertools.combinations_with_replacement(self.dist_variables, self.k))
+        self.assignment_permutations = bool(assignment_permutations)
+        if self.assignment_permutations:
+            if fixed_mu:
+                raise ValueError(
+                    "assignment_permutations cannot be combined with component-indexed "
+                    "fixed_mu constraints. Fit the selected ordered candidate instead."
+                )
+            if fixed_pi is not None:
+                fixed_pi_array = np.asarray(fixed_pi, dtype=float).reshape(-1)
+                if not np.allclose(fixed_pi_array, fixed_pi_array[0]):
+                    raise ValueError(
+                        "assignment_permutations requires exchangeable fixed_pi values."
+                    )
+            self.dist_combs = _expand_assignment_permutations(self.dist_combs)
+        self.n_assignment_starts = len(self.dist_combs)
         self.initialization=initialization
         self.debug = debug
         self.em_type = em_type_normalized
         self.gh_mstep_kwargs = {} if gh_mstep_kwargs is None else gh_mstep_kwargs
+        self.smsn_mstep_kwargs = {} if smsn_mstep_kwargs is None else smsn_mstep_kwargs
         self.init_fit_kwargs = {} if init_fit_kwargs is None else init_fit_kwargs
+        self.fixed_pi = None
+        if fixed_pi is not None:
+            fixed_pi = np.asarray(fixed_pi, dtype=float).reshape(-1)
+            if fixed_pi.size != self.k:
+                raise ValueError(f"fixed_pi must have length {self.k}.")
+            if np.any(fixed_pi <= 0):
+                raise ValueError("fixed_pi entries must be strictly positive.")
+            self.fixed_pi = fixed_pi / fixed_pi.sum()
+        self.fixed_mu = [] if fixed_mu is None else list(fixed_mu)
+        self.n_jobs = int(n_jobs) if n_jobs is not None else 1
+        if self.n_jobs == 0:
+            self.n_jobs = os.cpu_count() or 1
+        if self.n_jobs < 0:
+            self.n_jobs = max((os.cpu_count() or 1) + 1 + self.n_jobs, 1)
         self.init_fit_kwargs_by_module = {
             dist_map[name]: kwargs
             for name, kwargs in self.init_fit_kwargs.items()
@@ -873,10 +1298,7 @@ class fmvmm(BaseMixture):
     def _estimate_weighted_log_prob_nonidentical(self, X, alpha, pi, dist_comb):
         return self._log_pdf_non_identical(X,alpha,dist_comb) + np.log(pi)
 
-    def fit(self,sample):
-        self.data = self._process_data(sample)
-        self.n=len(sample)
-        # self.sample=self._process_data(sample)
+    def _reset_fit_storage(self):
         self.list_aic = []
         self.list_bic = []
         self.list_icl = []
@@ -886,65 +1308,108 @@ class fmvmm(BaseMixture):
         self.list_log_likelihood = []
         self.list_all_log_likelihood = []
         self.list_gamma_matrix = []
-        self.not_worked_dist=[]
-        self.worked_dist=[]
-        for l in range(len(self.dist_combs)):
-            try:
+        self.not_worked_dist = []
+        self.worked_dist = []
 
-                if self.initialization=="kmeans":
+    def _fit_single_candidate(self, dist_comb):
+        try:
+            if self.initialization=="kmeans":
+                self.pi_not, self.alpha_not = fmm_kmeans_init(
+                    self.data, self.k, dist_comb,
+                    fit_kwargs_by_module=self.init_fit_kwargs_by_module)
+                self.alpha_temp = self.alpha_not
+                self.pi_temp = self.pi_not
+            else:
+                self.pi_not, self.alpha_not = fmm_gmm_init(
+                    self.data, self.k, dist_comb,
+                    fit_kwargs_by_module=self.init_fit_kwargs_by_module)
+                self.alpha_temp = self.alpha_not
+                self.pi_temp = self.pi_not
+            if self.fixed_pi is not None:
+                self.pi_not = self.fixed_pi.copy()
+                self.pi_temp = self.fixed_pi.copy()
+            if self.fixed_mu:
+                self.alpha_not = _apply_fixed_mu(self.alpha_not, dist_comb, self.fixed_mu)
+                self.alpha_temp = self.alpha_not
 
-                    self.pi_not, self.alpha_not = fmm_kmeans_init(
-                        self.data, self.k, self.dist_combs[l],
-                        fit_kwargs_by_module=self.init_fit_kwargs_by_module)
-                    self.alpha_temp = self.alpha_not
-                    self.pi_temp = self.pi_not
-                else:
-                    self.pi_not, self.alpha_not = fmm_gmm_init(
-                        self.data, self.k, self.dist_combs[l],
-                        fit_kwargs_by_module=self.init_fit_kwargs_by_module)
-                    self.alpha_temp = self.alpha_not
-                    self.pi_temp = self.pi_not
-                if self.EM_type == "Soft":
-                    pi_new,alpha_new, log_likelihood_new,log_gamma_new=self._fit(
-                        self.data,
-                        self.pi_temp,
-                        self.alpha_temp,
-                        fmm_estimate_alphas_soft,
-                        dist_comb=self.dist_combs[l],
-                        soft_dist_comb=self.dist_combs[l],
-                        gh_mstep_kwargs=self.gh_mstep_kwargs
-                    )
-                else:
-                    pi_new,alpha_new, log_likelihood_new,log_gamma_new=self._fit(
-                        self.data,
-                        self.pi_temp,
-                        self.alpha_temp,
-                        fmm_estimate_alphas,
-                        dist_comb=self.dist_combs[l],
-                        fit_kwargs_by_module=self.init_fit_kwargs_by_module
-                    )
-                self.list_aic.append(
-                    fmm_aic(alpha_new, log_likelihood_new, self.dist_combs[l] ))
-                self.list_bic.append(
-                    fmm_bic(alpha_new, log_likelihood_new,self.dist_combs[l], self.n))
-                self.list_icl.append(
-                    fmm_icl(alpha_new, log_likelihood_new,self.dist_combs[l], self.n, np.exp(log_gamma_new)))
-                self.list_pi.append(pi_new)
-                # self.list_alpha.append(convert_to_numpy(alpha_new))
-                self.list_alpha.append(alpha_new)
-                self.list_cluster.append(log_gamma_new.argmax(axis=1))
-                self.list_log_likelihood.append(log_likelihood_new)
-                self.list_gamma_matrix.append(np.exp(log_gamma_new))
-                self.worked_dist.append(self.dist_combs[l])
-                self.list_all_log_likelihood.append(self.log_likelihoods)
-                if self.verbose:
-                    print("distribution fitted", get_dist_names(self.dist_combs[l]))
-            except:
-                if self.debug:
-                    traceback.print_exc()
-                    print("Error received while running,",self.dist_combs[l])
-                self.not_worked_dist.append(self.dist_combs[l])
-                pass
+            if self.EM_type == "Soft":
+                pi_new, alpha_new, log_likelihood_new, log_gamma_new = self._fit(
+                    self.data,
+                    self.pi_temp,
+                    self.alpha_temp,
+                    fmm_estimate_alphas_soft,
+                    dist_comb=dist_comb,
+                    soft_dist_comb=dist_comb,
+                    gh_mstep_kwargs=self.gh_mstep_kwargs,
+                    smsn_mstep_kwargs=self.smsn_mstep_kwargs,
+                    post_m_step=self._post_m_step_constraints if (self.fixed_pi is not None or self.fixed_mu) else None,
+                )
+            else:
+                pi_new, alpha_new, log_likelihood_new, log_gamma_new = self._fit(
+                    self.data,
+                    self.pi_temp,
+                    self.alpha_temp,
+                    fmm_estimate_alphas,
+                    dist_comb=dist_comb,
+                    fit_kwargs_by_module=self.init_fit_kwargs_by_module,
+                    post_m_step=self._post_m_step_constraints if (self.fixed_pi is not None or self.fixed_mu) else None,
+                )
+
+            return {
+                "worked": True,
+                "dist_comb": dist_comb,
+                "aic": fmm_aic(alpha_new, log_likelihood_new, dist_comb),
+                "bic": fmm_bic(alpha_new, log_likelihood_new, dist_comb, self.n),
+                "icl": fmm_icl(alpha_new, log_likelihood_new, dist_comb, self.n, np.exp(log_gamma_new)),
+                "pi": pi_new,
+                "alpha": alpha_new,
+                "cluster": log_gamma_new.argmax(axis=1),
+                "log_likelihood": log_likelihood_new,
+                "gamma_matrix": np.exp(log_gamma_new),
+                "all_log_likelihood": list(self.log_likelihoods),
+            }
+        except Exception as exc:
+            if self.debug:
+                traceback.print_exc()
+                print("Error received while running,", dist_comb)
+            return {
+                "worked": False,
+                "dist_comb": dist_comb,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    def _post_m_step_constraints(self, pi_new, alpha_new):
+        if self.fixed_pi is not None:
+            pi_new = self.fixed_pi.copy()
+        alpha_new = _apply_fixed_mu(alpha_new, self._current_dist_comb, self.fixed_mu)
+        return pi_new, alpha_new
+
+    def _append_candidate_result(self, result):
+        if not result.get("worked", False):
+            dist_comb = result.get("dist_comb")
+            if dist_comb is None:
+                dist_comb = _dist_comb_from_names(result.get("dist_names", []))
+            self.not_worked_dist.append(dist_comb)
+            return
+
+        dist_comb = result.get("dist_comb")
+        if dist_comb is None:
+            dist_comb = _dist_comb_from_names(result["dist_names"])
+
+        self.list_aic.append(result["aic"])
+        self.list_bic.append(result["bic"])
+        self.list_icl.append(result["icl"])
+        self.list_pi.append(result["pi"])
+        self.list_alpha.append(result["alpha"])
+        self.list_cluster.append(result["cluster"])
+        self.list_log_likelihood.append(result["log_likelihood"])
+        self.list_gamma_matrix.append(result["gamma_matrix"])
+        self.worked_dist.append(dist_comb)
+        self.list_all_log_likelihood.append(result["all_log_likelihood"])
+        if self.verbose:
+            print("distribution fitted", get_dist_names(dist_comb))
+
+    def _finalize_fit_storage(self):
         self.list_pi,self.list_alpha,self.nan_ind=remove_nan_tuples(self.list_pi,self.list_alpha)
         self.list_aic=remove_elements_by_index(self.list_aic,self.nan_ind)
         self.list_bic=remove_elements_by_index(self.list_bic, self.nan_ind)
@@ -955,6 +1420,64 @@ class fmvmm(BaseMixture):
         self.not_worked_dist.extend(w for w in [self.worked_dist[h] for h in self.nan_ind])
         self.worked_dist=remove_elements_by_index(self.worked_dist, self.nan_ind)
         self.list_all_log_likelihood=remove_elements_by_index(self.list_all_log_likelihood, self.nan_ind)
+
+    def _collapse_assignment_permutations(self):
+        """Keep the best fit for each unordered family multiset."""
+        if not self.assignment_permutations or len(self.worked_dist) <= 1:
+            return
+
+        best_by_key = {}
+        key_order = []
+        for idx, dist_comb in enumerate(self.worked_dist):
+            key = _assignment_equivalence_key(dist_comb)
+            if key not in best_by_key:
+                best_by_key[key] = idx
+                key_order.append(key)
+                continue
+            current = best_by_key[key]
+            if (self.list_bic[idx], -self.list_log_likelihood[idx]) < (
+                self.list_bic[current], -self.list_log_likelihood[current]
+            ):
+                best_by_key[key] = idx
+
+        keep = [best_by_key[key] for key in key_order]
+        fields = [
+            "list_aic", "list_bic", "list_icl", "list_pi", "list_alpha",
+            "list_cluster", "list_log_likelihood", "list_gamma_matrix",
+            "worked_dist", "list_all_log_likelihood",
+        ]
+        for field in fields:
+            values = getattr(self, field)
+            setattr(self, field, [values[idx] for idx in keep])
+
+    def fit(self,sample):
+        self.data = self._process_data(sample)
+        self.n=len(sample)
+        # self.sample=self._process_data(sample)
+        self._reset_fit_storage()
+        if self.n_jobs == 1 or len(self.dist_combs) <= 1:
+            for dist_comb in self.dist_combs:
+                self._current_dist_comb = dist_comb
+                self._append_candidate_result(self._fit_single_candidate(dist_comb))
+        else:
+            n_workers = min(self.n_jobs, len(self.dist_combs))
+            worker_args = [
+                (
+                    self.data, self.k, _dist_names_from_comb(dist_comb), self.tol,
+                    self.initialization, self.print_log_likelihood,
+                    self.max_iter, self.verbose, self.debug, self.em_type,
+                    self.gh_mstep_kwargs, self.smsn_mstep_kwargs,
+                    self.init_fit_kwargs, self.fixed_pi,
+                    self.fixed_mu,
+                )
+                for dist_comb in self.dist_combs
+            ]
+            with ProcessPoolExecutor(max_workers=n_workers) as executor:
+                for result in executor.map(_fit_fmvmm_candidate_worker, worker_args):
+                    self._append_candidate_result(result)
+
+        self._finalize_fit_storage()
+        self._collapse_assignment_permutations()
         self.fitted=True
         if self.verbose:
             print("Model fitted successfully")
@@ -1182,7 +1705,7 @@ class fmvmm(BaseMixture):
                 I_raw, complete_opg, missing_info, S_obs, param_dims = (
                     louis_score_decomposition_fmvmm(X, pi, alpha, mix, tau)
                 )
-                information_label = "soft_louis_score_decomposition"
+                information_label = "soft_louis_complete_hessian_minus_missing_score_variance"
             else:
                 S_obs, _, param_dims = observed_score_matrix_fmvmm(
                     X, pi, alpha, mix, tau
@@ -1243,6 +1766,7 @@ class fmvmm(BaseMixture):
                 "score_sum_norm": float(np.linalg.norm(score_sum)),
                 "condition_number": float(condition_number),
                 "complete_score_opg": complete_opg,
+                "complete_information": complete_opg,
                 "missing_information": missing_info,
             })
 
@@ -1265,15 +1789,40 @@ class fmvmm(BaseMixture):
         kwargs.setdefault("method", "classification")
         return self.get_info_mat(*args, **kwargs)
 
+    def top_mixtures(self, n_top=10, criterion="bic"):
+        """
+        Return the top fitted candidate mixtures by AIC, BIC, ICL, or log-likelihood.
+
+        The output is a list of dictionaries so it can be written directly to a
+        table for model-selection leaderboards.
+        """
+        criterion = criterion.lower()
+        if criterion not in {"aic", "bic", "icl", "loglik", "log_likelihood"}:
+            raise ValueError("criterion must be one of 'aic', 'bic', 'icl', or 'loglik'.")
+
+        rows = []
+        for i, dist_comb in enumerate(self.worked_dist):
+            rows.append({
+                "index": i,
+                "mixture": [str(dist_comb[j].__name__) for j in range(len(dist_comb))],
+                "aic": float(self.list_aic[i]),
+                "bic": float(self.list_bic[i]),
+                "icl": float(self.list_icl[i]),
+                "log_likelihood": float(self.list_log_likelihood[i]),
+            })
+
+        key = "log_likelihood" if criterion in {"loglik", "log_likelihood"} else criterion
+        reverse = key == "log_likelihood"
+        rows = sorted(rows, key=lambda row: row[key], reverse=reverse)
+        for rank, row in enumerate(rows, start=1):
+            row["rank"] = rank
+            row[f"delta_{key}"] = (
+                row[key] - rows[0][key] if reverse else row[key] - rows[0][key]
+            )
+        return rows[:n_top]
+
     def get_top_mixtures(self,n_top=10):
-        wrk_lst=[]
-        for i in range(len(self.worked_dist)):
-            wrk_lst.append([str(self.worked_dist[i][j].__name__) for j in range(len(self.worked_dist[i]))])
-
-        # Combine the two lists into a list of tuples
-        combined = list(zip(self.list_bic, wrk_lst))
-
-        # Sort the list of tuples based on bic values
-        sorted_combined = sorted(combined)
-
-        return sorted_combined[:n_top]
+        """
+        Backward-compatible BIC leaderboard used by earlier examples.
+        """
+        return [(row["bic"], row["mixture"]) for row in self.top_mixtures(n_top=n_top, criterion="bic")]

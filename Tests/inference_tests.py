@@ -8,6 +8,7 @@ from fmvmm.mixtures.FMVMM import fmvmm
 
 def _data():
     rng = np.random.default_rng(321)
+    np.random.seed(321)
     x1 = mvn.rvs(
         np.array([0.0, 0.0]),
         np.array([[0.45, 0.05], [0.05, 0.35]]),
@@ -29,6 +30,8 @@ def main():
     model = fmvmm(
         n_clusters=2,
         list_of_dist=["mvn", "mvsl"],
+        specific_comb=True,
+        assignment_permutations=True,
         max_iter=3,
         verbose=False,
         debug=False,
@@ -49,18 +52,21 @@ def main():
     assert np.isfinite(wald.statistic)
     assert wald.df == 1
 
-    score = score_test(model, ["eta[0]"], parameterization="internal")
-    assert np.isfinite(score.statistic)
-    assert score.df == 1
-
     null_model = fmvmm(
         n_clusters=2,
-        list_of_dist=["mvn"],
+        list_of_dist=["mvn", "mvsl"],
+        specific_comb=True,
+        assignment_permutations=True,
+        fixed_pi=[0.5, 0.5],
         max_iter=3,
         verbose=False,
         debug=False,
     )
     null_model.fit(x)
+    score = score_test(null_model, ["eta[0]"], parameterization="internal")
+    assert np.isfinite(score.statistic)
+    assert score.df == 1
+
     lrt_result = lrt(model, null_model, df=1)
     assert np.isfinite(lrt_result.statistic)
     assert lrt_result.df == 1

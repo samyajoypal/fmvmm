@@ -22,15 +22,9 @@ def _gig_to_scipy_params_(lmbda, chi, psi):
     """
     p = lmbda
     b = np.sqrt(chi*psi)
-    #loc = 0
     scale = np.sqrt(chi/psi)
-    #alpha = np.sqrt(chi/psi)
-    beta2 = psi*chi
-    beta =np.sqrt(psi*chi);
-    lm1 = lmbda - 1.0;
-    lm12 = lm1*lm1;
-    m = (lm1 + np.sqrt(lm12 + beta2))/beta;
-    return p, b, m, scale
+    loc = 0
+    return p, b, loc, scale
 
 def _check_gig_pars(lmbda, chi, psi):
     """
@@ -68,8 +62,8 @@ def logpdf(x, lmbda=1, chi=1, psi=1):
         # inverse gamma (students t case)
         logdensity = scipy.stats.invgamma.logpdf(x, a=-lmbda, scale=0.5*chi)
     elif chi==0:
-        # gamma (VG case)
-        logdensity = scipy.stats.gamma.logpdf(x, a=lmbda, scale=psi/2)
+        # gamma (VG case), rate psi / 2
+        logdensity = scipy.stats.gamma.logpdf(x, a=lmbda, scale=2/psi)
     else:
         p, b, loc, scale = _gig_to_scipy_params_(lmbda, chi, psi)
         logdensity = scipy.stats.geninvgauss.logpdf(x, p=p, b=b, loc=loc, scale=scale)
@@ -120,8 +114,8 @@ def logcdf(x, lmbda=1, chi=1, psi=1):
         # inverse gamma (students t case)
         return scipy.stats.invgamma.logcdf(x, a=-lmbda, scale=0.5*chi)
     elif chi==0:
-        # gamma (VG case)
-        return scipy.stats.gamma.logcdf(x, a=lmbda, scale=psi/2)
+        # gamma (VG case), rate psi / 2
+        return scipy.stats.gamma.logcdf(x, a=lmbda, scale=2/psi)
     else:
         p, b, loc, scale = _gig_to_scipy_params_(lmbda, chi, psi)
         return scipy.stats.geninvgauss.logcdf(x, p=p, b=b, loc=loc, scale=scale)
@@ -167,10 +161,10 @@ def rvs(lmbda=1, chi=1, psi=1, size=1):
 
     if psi==0:
         # inverse gamma (students t case)
-        return scipy.stats.gamma.rvs(a=-lmbda, scale=chi/2, size=size)
+        return scipy.stats.invgamma.rvs(a=-lmbda, scale=chi/2, size=size)
     elif chi==0:
-        # gamma (VG case)
-        return scipy.stats.gamma.rvs(a=lmbda, scale=psi/2, size=size)
+        # gamma (VG case), rate psi / 2
+        return scipy.stats.gamma.rvs(a=lmbda, scale=2/psi, size=size)
     else:
         p, b, loc, scale = _gig_to_scipy_params_(lmbda, chi, psi)
         return scipy.stats.geninvgauss.rvs(p=p, b=b, loc=loc, scale=scale, size=size)
@@ -285,7 +279,7 @@ def expect(lmbda, chi, psi, func = "x"):
         elif np.all(chi == 0):
             ## Gamma -> VG
             print("Case 'chi == 0' and 'func = 1/x' is not implemented, using scipy function...")
-            return scipy.stats.gamma.expect(lambda x: 1/x, args=(lmbda,), scale=psi/2)
+            return scipy.stats.gamma.expect(lambda x: 1/x, args=(lmbda,), scale=2/psi)
         else:
             # GIG -> ghyp, hyp, NIG
             # print("# doing GIG -> ghyp, hyp, NIG")
