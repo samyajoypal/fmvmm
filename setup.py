@@ -10,7 +10,7 @@ project_url = {
 
 setup(
     name="fmvmm",
-    version="3.0.0",
+    version="3.0.1",
     author="Samyajoy Pal",
     author_email="palsamyajoy@gmail.com",
     license="MIT",

@@ -481,7 +481,8 @@ def fitghypmv(
     x, lmbda = 1, alpha_bar = 1, mu = None, sigma = None, gamma = None, symmetric = False,
     standardize = False, nit = 2000, reltol = 1e-8, abstol = 1e-7, silent = False,
     opt_pars = {"lmbda": True, "alpha_bar": True, "mu": True, "sigma": True, "gamma": True},
-    weights = None
+    weights = None, opt_maxiter = 100, opt_maxfun = 1000, opt_ftol = None,
+    opt_gtol = None, opt_maxls = None, optimizer_options = None
 ):
     """
     Estimate the parameters of the generalised hyperbolic distribution. We use
@@ -523,6 +524,12 @@ def fitghypmv(
         denoting if the parameters should be estimated or fixed to their initial value.
         Defaults to fitting all parameters.
     :type opt_pars: dict, optional
+    :param opt_maxiter: Maximum L-BFGS-B iterations for scalar mixing-parameter updates.
+    :type opt_maxiter: int, optional
+    :param opt_maxfun: Maximum objective evaluations for scalar mixing-parameter updates.
+    :type opt_maxfun: int, optional
+    :param optimizer_options: Additional scipy.optimize.minimize options.
+    :type optimizer_options: dict, optional
     :return: The fitted parameters (<float> lmbda, <float> alpha_bar, <array> mu, <array> sigma,
         <array> gamma) and a list of log-likelihood values at each iteration of the EM algorithm,
         the number of performed iterations, whether the algorithm coverged, and the final AIC.
@@ -560,6 +567,20 @@ def fitghypmv(
         except np.linalg.LinAlgError:
             cov = cov + 1e-8 * np.eye(cov.shape[0])
         return cov
+
+    inner_optimizer_options = {}
+    if opt_maxiter is not None:
+        inner_optimizer_options["maxiter"] = int(opt_maxiter)
+    if opt_maxfun is not None:
+        inner_optimizer_options["maxfun"] = int(opt_maxfun)
+    if opt_ftol is not None:
+        inner_optimizer_options["ftol"] = float(opt_ftol)
+    if opt_gtol is not None:
+        inner_optimizer_options["gtol"] = float(opt_gtol)
+    if opt_maxls is not None:
+        inner_optimizer_options["maxls"] = int(opt_maxls)
+    if optimizer_options is not None:
+        inner_optimizer_options.update(optimizer_options)
 
     lmbda = _avoid_vg_singularity(lmbda, alpha_bar, d)
     chi, psi = _alphabar2chipsi(alpha_bar, lmbda)
@@ -667,7 +688,13 @@ def fitghypmv(
 
             x0= np.log(lmbda)
 
-            tmp_fit = scipy.optimize.minimize(vg_optfunc, x0, args=(eta_sum, xi_sum, n_eff), method='L-BFGS-B') #method='L-BFGS-B',np.log(lmbda)+2
+            tmp_fit = scipy.optimize.minimize(
+                vg_optfunc,
+                x0,
+                args=(eta_sum, xi_sum, n_eff),
+                method='L-BFGS-B',
+                options=inner_optimizer_options,
+            ) #method='L-BFGS-B',np.log(lmbda)+2
 
             lmbda = _as_scalar_param(np.exp(tmp_fit["x"]), "lmbda")
             lmbda = _avoid_vg_singularity(lmbda, alpha_bar, d)
@@ -678,7 +705,13 @@ def fitghypmv(
             delta_sum = _wsum(gig.expect(lmbda-d/2, Q+chi, psi+Offset, func="1/x"))
 
             x0= custom_log(-1 - lmbda) #np.log(lmbda) np.random.rand()
-            tmp_fit = scipy.optimize.minimize(t_optfunc, x0, args=(delta_sum, xi_sum, n_eff), method='L-BFGS-B') #custom_log(-1 - lmbda)+10
+            tmp_fit = scipy.optimize.minimize(
+                t_optfunc,
+                x0,
+                args=(delta_sum, xi_sum, n_eff),
+                method='L-BFGS-B',
+                options=inner_optimizer_options,
+            ) #custom_log(-1 - lmbda)+10
 
             lmbda = _as_scalar_param((-1 - np.exp(tmp_fit["x"])), "lmbda")
 
@@ -698,8 +731,13 @@ def fitghypmv(
 
 
 
-            tmp_fit = scipy.optimize.minimize(gig_optfunc, thepars_v, args=(
-                mix_pars_fixed_v, pars_order, delta_sum, eta_sum, xi_sum, n_eff), method='L-BFGS-B')
+            tmp_fit = scipy.optimize.minimize(
+                gig_optfunc,
+                thepars_v,
+                args=(mix_pars_fixed_v, pars_order, delta_sum, eta_sum, xi_sum, n_eff),
+                method='L-BFGS-B',
+                options=inner_optimizer_options,
+            )
 
             par = np.concatenate([tmp_fit["x"], mix_pars_fixed_v])
 

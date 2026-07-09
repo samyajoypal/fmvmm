@@ -246,6 +246,7 @@ def _soft_update_smsn_family(dist_name, X, weights, alpha_prev,
     q0 = objective(u0)
     options = {
         "maxiter": int(smsn_mstep_kwargs.pop("maxiter", 80)),
+        "maxfun": int(smsn_mstep_kwargs.pop("maxfun", 1000)),
         "ftol": float(smsn_mstep_kwargs.pop("ftol", 1e-9)),
         "gtol": float(smsn_mstep_kwargs.pop("gtol", 1e-5)),
         "maxls": int(smsn_mstep_kwargs.pop("maxls", 30)),
@@ -263,8 +264,40 @@ def _soft_update_smsn_family(dist_name, X, weights, alpha_prev,
     return alpha_prev
 
 
+def _weighted_component_loglik(dist_name, X, weights, alpha):
+    """Weighted observed component log-likelihood for GEM acceptance."""
+    try:
+        log_density = np.asarray(
+            dist_map[dist_name].logpdf(X, *alpha), dtype=float
+        ).reshape(-1)
+    except Exception:
+        return -np.inf
+    if log_density.size != X.shape[0] or not np.all(np.isfinite(log_density)):
+        return -np.inf
+    value = float(np.dot(np.asarray(weights, dtype=float).reshape(-1), log_density))
+    return value if np.isfinite(value) else -np.inf
+
+
+def _gem_accept_component_update(dist_name, X, weights, alpha_prev, alpha_candidate,
+                                 accept_tol=1e-8):
+    """
+    Accept a numerical M-step update only when it satisfies the GEM condition.
+
+    The candidate may be non-converged because an inner optimizer hit maxiter; it is
+    still a valid generalized EM update if the weighted component log-likelihood
+    does not decrease.
+    """
+    old_value = _weighted_component_loglik(dist_name, X, weights, alpha_prev)
+    new_value = _weighted_component_loglik(dist_name, X, weights, alpha_candidate)
+    if np.isfinite(new_value) and (
+        not np.isfinite(old_value) or new_value >= old_value - accept_tol
+    ):
+        return alpha_candidate
+    return alpha_prev
+
+
 def _soft_update_one_component(dist_name, X, weights, alpha_prev, gh_mstep_kwargs=None,
-                               smsn_mstep_kwargs=None):
+                               smsn_mstep_kwargs=None, mstep_accept_tol=1e-8):
     gamma = np.asarray(weights, dtype=float).reshape(-1, 1)
     if np.sum(gamma) <= 1e-12:
         return alpha_prev
@@ -275,20 +308,26 @@ def _soft_update_one_component(dist_name, X, weights, alpha_prev, gh_mstep_kwarg
     p = X.shape[1]
 
     if dist_name in {"mghp", "mgst", "mvhb", "mnig", "mvvg"}:
-        return _soft_update_gh_family(
+        alpha_candidate = _soft_update_gh_family(
             dist_name, X, gamma[:, 0], alpha_prev, gh_mstep_kwargs
+        )
+        return _gem_accept_component_update(
+            dist_name, X, gamma[:, 0], alpha_prev, alpha_candidate, mstep_accept_tol
         )
 
     if dist_name == "mvn":
         return _weighted_mvn_update(X, gamma[:, 0], alpha_prev)
 
     if dist_name in {"mvsn", "mvst", "msnc", "mssl", "mvt", "msl"}:
-        return _soft_update_smsn_family(
+        alpha_candidate = _soft_update_smsn_family(
             dist_name,
             X,
             gamma[:, 0],
             alpha_prev,
             smsn_mstep_kwargs=smsn_mstep_kwargs,
+        )
+        return _gem_accept_component_update(
+            dist_name, X, gamma[:, 0], alpha_prev, alpha_candidate, mstep_accept_tol
         )
 
     if dist_name == "mvsn":
@@ -324,7 +363,10 @@ def _soft_update_one_component(dist_name, X, weights, alpha_prev, gh_mstep_kwarg
         return mu_new, sigma_new, lmbda_new, np.array([nu_new])
 
     if dist_name == "mvsl":
-        return estimate_alphas_skewlaplace(X, gamma, alpha_list)[0]
+        alpha_candidate = estimate_alphas_skewlaplace(X, gamma, alpha_list)[0]
+        return _gem_accept_component_update(
+            dist_name, X, gamma[:, 0], alpha_prev, alpha_candidate, mstep_accept_tol
+        )
 
     if dist_name == "mvt":
         loc, shape, df = alpha_prev
@@ -354,6 +396,7 @@ def fmm_estimate_alphas_soft(X, gamma_matrix, alpha_prev, soft_dist_comb=None, *
         raise ValueError("soft_dist_comb must be provided for non-identical soft EM.")
     gh_mstep_kwargs = kwargs.get("gh_mstep_kwargs", {})
     smsn_mstep_kwargs = kwargs.get("smsn_mstep_kwargs", {})
+    mstep_accept_tol = kwargs.get("mstep_accept_tol", 1e-8)
     alpha_new = []
     for j, dist_module in enumerate(soft_dist_comb):
         dist_name = dist_name_by_module.get(dist_module)
@@ -365,6 +408,7 @@ def fmm_estimate_alphas_soft(X, gamma_matrix, alpha_prev, soft_dist_comb=None, *
                     dist_name, X, gamma_matrix[:, j], alpha_prev[j],
                     gh_mstep_kwargs=gh_mstep_kwargs,
                     smsn_mstep_kwargs=smsn_mstep_kwargs,
+                    mstep_accept_tol=mstep_accept_tol,
                 )
             )
         except Exception:
@@ -1177,7 +1221,7 @@ def _fit_fmvmm_candidate_worker(args):
     (
         data, n_clusters, dist_names, tol, initialization, print_log_likelihood,
         max_iter, verbose, debug, em_type, gh_mstep_kwargs, smsn_mstep_kwargs, init_fit_kwargs,
-        fixed_pi, fixed_mu,
+        fixed_pi, fixed_mu, mstep_max_iter, mstep_maxfun, mstep_accept_tol,
     ) = args
 
     candidate = fmvmm(
@@ -1197,6 +1241,9 @@ def _fit_fmvmm_candidate_worker(args):
         n_jobs=1,
         fixed_pi=fixed_pi,
         fixed_mu=fixed_mu,
+        mstep_max_iter=mstep_max_iter,
+        mstep_maxfun=mstep_maxfun,
+        mstep_accept_tol=mstep_accept_tol,
     )
     candidate.fit(data)
     if len(candidate.worked_dist) == 0:
@@ -1223,7 +1270,7 @@ def _fit_fmvmm_candidate_worker(args):
 
 
 class fmvmm(BaseMixture):
-    def __init__(self,n_clusters,tol=0.0001, list_of_dist=all_dist,specific_comb=False,initialization="kmeans",print_log_likelihood=False,max_iter=25, verbose=True, debug = False, em_type="soft", gh_mstep_kwargs=None, smsn_mstep_kwargs=None, init_fit_kwargs=None, n_jobs=1, candidate_combinations=None, fixed_pi=None, fixed_mu=None, assignment_permutations=False):
+    def __init__(self,n_clusters,tol=0.0001, list_of_dist=all_dist,specific_comb=False,initialization="kmeans",print_log_likelihood=False,max_iter=25, verbose=True, debug = False, em_type="soft", gh_mstep_kwargs=None, smsn_mstep_kwargs=None, init_fit_kwargs=None, n_jobs=1, candidate_combinations=None, fixed_pi=None, fixed_mu=None, assignment_permutations=False, mstep_max_iter=None, mstep_maxfun=None, mstep_accept_tol=1e-8):
         em_type_normalized = em_type.lower()
         if em_type_normalized not in ("hard", "soft"):
             raise ValueError("em_type must be either 'hard' or 'soft'.")
@@ -1262,8 +1309,18 @@ class fmvmm(BaseMixture):
         self.initialization=initialization
         self.debug = debug
         self.em_type = em_type_normalized
-        self.gh_mstep_kwargs = {} if gh_mstep_kwargs is None else gh_mstep_kwargs
-        self.smsn_mstep_kwargs = {} if smsn_mstep_kwargs is None else smsn_mstep_kwargs
+        self.mstep_max_iter = mstep_max_iter
+        self.mstep_maxfun = mstep_maxfun
+        self.mstep_accept_tol = float(mstep_accept_tol)
+        self.gh_mstep_kwargs = {} if gh_mstep_kwargs is None else dict(gh_mstep_kwargs)
+        self.smsn_mstep_kwargs = {} if smsn_mstep_kwargs is None else dict(smsn_mstep_kwargs)
+        if mstep_max_iter is not None:
+            self.gh_mstep_kwargs.setdefault("nit", int(mstep_max_iter))
+            self.gh_mstep_kwargs.setdefault("opt_maxiter", int(mstep_max_iter))
+            self.smsn_mstep_kwargs.setdefault("maxiter", int(mstep_max_iter))
+        if mstep_maxfun is not None:
+            self.gh_mstep_kwargs.setdefault("opt_maxfun", int(mstep_maxfun))
+            self.smsn_mstep_kwargs.setdefault("maxfun", int(mstep_maxfun))
         self.init_fit_kwargs = {} if init_fit_kwargs is None else init_fit_kwargs
         self.fixed_pi = None
         if fixed_pi is not None:
@@ -1342,6 +1399,7 @@ class fmvmm(BaseMixture):
                     soft_dist_comb=dist_comb,
                     gh_mstep_kwargs=self.gh_mstep_kwargs,
                     smsn_mstep_kwargs=self.smsn_mstep_kwargs,
+                    mstep_accept_tol=self.mstep_accept_tol,
                     post_m_step=self._post_m_step_constraints if (self.fixed_pi is not None or self.fixed_mu) else None,
                 )
             else:
@@ -1468,7 +1526,8 @@ class fmvmm(BaseMixture):
                     self.max_iter, self.verbose, self.debug, self.em_type,
                     self.gh_mstep_kwargs, self.smsn_mstep_kwargs,
                     self.init_fit_kwargs, self.fixed_pi,
-                    self.fixed_mu,
+                    self.fixed_mu, self.mstep_max_iter, self.mstep_maxfun,
+                    self.mstep_accept_tol,
                 )
                 for dist_comb in self.dist_combs
             ]
