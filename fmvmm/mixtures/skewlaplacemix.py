@@ -23,11 +23,11 @@ def sample_skewlaplace(mu, Sigma, gamma,n, random_state=None):
     """
     Generate 'n' samples in R^p from a single p-variate Skew-Laplace distribution.
 
-    The model:
-      1) v_i ~ Gamma( (p+1)/2, scale=2 )
-      2) z_i ~ Normal(0, I_p)
-      3) x_i = mu + (1 / v_i)*gamma + sqrt(1 / v_i)* L * z_i
-         where L = chol(Sigma).
+    The parameterization matches ``compute_log_pdf_skewlaplace``:
+      1) W_i ~ Gamma((p+1)/2, scale=2)
+      2) Z_i ~ Normal(0, I_p)
+      3) X_i = mu + W_i * gamma + sqrt(W_i) * L Z_i,
+         where L L^T = Sigma.
 
     Parameters
     ----------
@@ -36,7 +36,7 @@ def sample_skewlaplace(mu, Sigma, gamma,n, random_state=None):
     mu : (p,) array
         Location vector
     Sigma : (p,p) array
-        Positive-definite covariance
+        Positive-definite scatter matrix
     gamma : (p,) array
         Skewness vector
     random_state : int or None
@@ -53,11 +53,7 @@ def sample_skewlaplace(mu, Sigma, gamma,n, random_state=None):
     rng = np.random.default_rng(random_state)
     p = len(mu)
 
-    # 1) v_i = 1 / Gamma( (p+1)/2, scale=2 )
-    # Actually we want v_i = 1 / g_i, where g_i ~ Gamma((p+1)/2, scale=2).
-    # => v_i = 1 / g_i
-    g_samples = rng.gamma(shape=(p+1)/2.0, scale=2.0, size=n)
-    v_samples = 1.0 / g_samples
+    w_samples = rng.gamma(shape=(p+1)/2.0, scale=2.0, size=n)
 
     # 2) z_i ~ Normal(0, I_p)
     z_samples = rng.normal(size=(n, p))
@@ -65,16 +61,24 @@ def sample_skewlaplace(mu, Sigma, gamma,n, random_state=None):
     # 3) L = chol(Sigma)
     L = cholesky(Sigma)
 
-    # 4) x_i = mu + (1/v_i)*gamma + sqrt(1/v_i)* L * z_i
-    X = np.zeros((n, p))
-    for i in range(n):
-        X[i] = (
-            mu
-            + v_samples[i] * gamma
-            + np.sqrt(v_samples[i]) * (L @ z_samples[i])
-        )
+    return (
+        mu
+        + w_samples[:, None] * gamma
+        + np.sqrt(w_samples)[:, None] * (z_samples @ L.T)
+    )
 
-    return X
+
+def _regularize_cov(cov, eps=1e-8):
+    cov = np.asarray(cov, dtype=float)
+    cov = 0.5 * (cov + cov.T)
+    try:
+        eigvals = np.linalg.eigvalsh(cov)
+        min_eig = float(np.min(eigvals))
+        if min_eig < eps:
+            cov = cov + (eps - min_eig) * np.eye(cov.shape[0])
+    except np.linalg.LinAlgError:
+        cov = cov + eps * np.eye(cov.shape[0])
+    return cov
 
 
 def compute_empirical_info_and_se(model, pi = None, alpha = None, data = None, gamma_res = None, use_model = True):
@@ -477,8 +481,8 @@ def estimate_alphas_skewlaplace(X, gamma_matrix, alpha_old):
     n, p = X.shape
     K = len(alpha_old)
 
-    # We will store new parameters in alpha_new
     alpha_new = [None]*K
+    eps = 1e-12
 
     # For convenience, precompute inverses and a_k = sqrt(1 + gamma_k^T S_k^-1 gamma_k)
     inv_Sigma_old = []
@@ -489,83 +493,54 @@ def estimate_alphas_skewlaplace(X, gamma_matrix, alpha_old):
         gk_old = alpha_old[k][2]
         a_array[k] = np.sqrt(1.0 + gk_old @ Sk_inv @ gk_old)
 
-    # We will accumulate partial sums for each cluster k.
-    # For clarity, define arrays of shape (K,) or (K,p) or (K,p,p) as needed.
-    sum_zk          = np.zeros(K)       # sum_i gamma_{i,k}
-    sum_zk_v1       = np.zeros(K)       # sum_i gamma_{i,k} * v1_{i,k}
-    sum_zk_v2       = np.zeros(K)       # sum_i gamma_{i,k} * v2_{i,k}
-    sum_zk_x        = np.zeros((K, p))   # sum_i [gamma_{i,k} * x_i]
-    sum_zk_v1_x     = np.zeros((K, p))   # sum_i [gamma_{i,k} * v1_{i,k} * x_i]
-    # For Sigma:
-    # We'll accumulate the numerators S_k_num and the denominators S_k_den:
-    S_k_num = [np.zeros((p, p)) for _ in range(K)]
-    S_k_den = np.zeros(K)
-
-    # Loop over data points once, computing v1_{i,k}, v2_{i,k} and partial sums.
-    for i in range(n):
-        xi = X[i]
-
-        for k in range(K):
-            gk_old = alpha_old[k][2]   # shape (p,)
-            muk_old = alpha_old[k][0]     # shape (p,)
-            Sk_inv = inv_Sigma_old[k]
-            ak = a_array[k]
-
-            # Distance using old mu, old Sigma:
-            diff = xi - muk_old
-            dist_sq = diff @ Sk_inv @ diff
-            dist_val = np.sqrt(max(dist_sq, 1e-14))  # clip to avoid /0
-
-            # v1_{i,k} and v2_{i,k}:
-            v1_ik = ak / dist_val
-            # a_k^2 = 1 + gk_old^T S_k^-1 gk_old
-            a_sq = ak * ak
-            v2_ik = (1.0 + np.sqrt(a_sq * dist_val*dist_val)) / a_sq
-
-            # Accumulate partial sums for gamma_k, mu_k, etc.
-            zik = gamma_matrix[i, k]
-            sum_zk[k]      += zik
-            sum_zk_v1[k]   += zik * v1_ik
-            sum_zk_v2[k]   += zik * v2_ik
-            sum_zk_x[k]    += zik * xi
-            sum_zk_v1_x[k] += zik * v1_ik * xi
-
-            # Now partial sums for Sigma:
-            # old formula from MATLAB:
-            #   [z_ik * v1_ik * (x_i - mu_k_old)(x_i - mu_k_old)^T]  -  [gk_old*gk_old^T * z_ik*v2_ik]
-            # stored in S_k_num
-            outer_xdiff = np.outer(diff, diff)
-            S_k_num[k] += zik * v1_ik * outer_xdiff  -  np.outer(gk_old, gk_old)* (zik * v2_ik)
-
-            # And the denominator piece:
-            #   z_ik*v1_ik * diff^T * Sk_inv * diff  -  (gk_old^T Sk_inv gk_old) * z_ik*v2_ik
-            S_k_den[k] += zik * v1_ik * (diff @ Sk_inv @ diff)  \
-                          -  (gk_old @ Sk_inv @ gk_old) * (zik * v2_ik)
+    V1 = np.zeros((n, K), dtype=float)
+    V2 = np.zeros((n, K), dtype=float)
+    for k in range(K):
+        diff = X - alpha_old[k][0]
+        dist_sq = np.einsum("ij,jk,ik->i", diff, inv_Sigma_old[k], diff)
+        dist = np.sqrt(np.clip(dist_sq, 1e-14, None))
+        a_sq = a_array[k] * a_array[k]
+        V1[:, k] = a_array[k] / dist
+        V2[:, k] = (1.0 + a_array[k] * dist) / a_sq
 
     # Now finish updates for each cluster k, using the partial sums:
     for k in range(K):
-        # (1) Update gamma_k:
-        denom_k = sum_zk_v2[k] - (sum_zk[k]**2 / sum_zk_v1[k])
-        if abs(denom_k) < 1e-14:
-            denom_k = 1e-14 * np.sign(denom_k if denom_k != 0 else 1)
+        weights = np.asarray(gamma_matrix[:, k], dtype=float)
+        n_k = float(np.sum(weights))
+        if n_k <= eps:
+            alpha_new[k] = alpha_old[k]
+            continue
 
-        # part_k = sum_zk_x[k] - sum_zk[k]*( sum_zk_v1_x[k]/sum_zk_v1[k] )
-        part_k = sum_zk_x[k] - sum_zk[k] * (sum_zk_v1_x[k]/sum_zk_v1[k])
-        gk_new = part_k / denom_k  # shape (p,)
+        sum_z_v1 = float(np.dot(weights, V1[:, k]))
+        sum_z_v2 = float(np.dot(weights, V2[:, k]))
+        if sum_z_v1 <= eps:
+            alpha_new[k] = alpha_old[k]
+            continue
 
-        # (2) Update mu_k:
-        mu_k_new = (sum_zk_v1_x[k] - gk_new*sum_zk[k]) / sum_zk_v1[k]
+        sum_z_x = np.sum(weights[:, None] * X, axis=0)
+        sum_z_v1_x = np.sum((weights * V1[:, k])[:, None] * X, axis=0)
+        denom_gamma = sum_z_v2 - (n_k * n_k / sum_z_v1)
+        if denom_gamma <= eps:
+            alpha_new[k] = alpha_old[k]
+            continue
 
-        # (3) Update Sigma_k:
-        # numerator = p * S_k_num[k]
-        # denominator = S_k_den[k], then Sigma_k_new = numerator / denominator
-        # again clip if near zero
-        denom_sigma_k = S_k_den[k]
-        if abs(denom_sigma_k) < 1e-14:
-            denom_sigma_k = 1e-14 * np.sign(denom_sigma_k if denom_sigma_k != 0 else 1)
-        Sigma_k_new = (p * S_k_num[k]) / denom_sigma_k
+        gk_new = (sum_z_x - n_k * (sum_z_v1_x / sum_z_v1)) / denom_gamma
+        mu_k_new = (sum_z_v1_x - n_k * gk_new) / sum_z_v1
 
-        alpha_new[k] = (mu_k_new, Sigma_k_new,gk_new)
+        residual = X - mu_k_new
+        scatter = np.einsum(
+            "i,ij,ik->jk", weights * V1[:, k], residual, residual
+        )
+        cross = np.einsum("i,ij,k->jk", weights, residual, gk_new)
+        scatter = (
+            scatter
+            - cross
+            - cross.T
+            + sum_z_v2 * np.outer(gk_new, gk_new)
+        )
+        Sigma_k_new = _regularize_cov(scatter / n_k)
+
+        alpha_new[k] = (mu_k_new, Sigma_k_new, gk_new)
 
     return alpha_new
 
@@ -580,7 +555,7 @@ def compute_log_pdf_skewlaplace(X, mu_k, Sigma_k, gamma_k):
     mu_k : array-like, shape (p,)
         Mean vector of the distribution.
     Sigma_k : array-like, shape (p, p)
-        Covariance matrix (must be positive-definite).
+        Scatter matrix (must be positive-definite).
     gamma_k : array-like, shape (p,)
         Skewness vector.
 

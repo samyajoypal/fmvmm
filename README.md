@@ -71,16 +71,19 @@ from fmvmm.distributions import multivariate_norm as mvn
 from fmvmm.distributions import multivariate_skew_laplace as mvsl
 from fmvmm.mixtures.FMVMM import fmvmm
 
+rng = np.random.default_rng(123)
 x1 = mvn.rvs(
     np.array([0.0, 0.0]),
     np.array([[0.45, 0.08], [0.08, 0.35]]),
     size=40,
+    random_state=rng,
 )
 x2 = mvsl.rvs(
     np.array([2.5, 2.0]),
     np.array([[0.55, -0.05], [-0.05, 0.45]]),
     np.array([0.7, -0.3]),
     size=40,
+    random_state=rng,
 )
 data = np.vstack([x1, x2])
 

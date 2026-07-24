@@ -14,16 +14,16 @@ def pdf(x,mu,sigma,gamma):
 
 def loglike(x,mu,sigma,gamma):
 
-    np.sum(logpdf(x,mu,sigma,gamma))
+    return np.sum(logpdf(x,mu,sigma,gamma))
 
 def total_params(mu,sigma,gamma):
     p = len(mu)
 
-    return 2*p + (p*(p+1)/2)
+    return int(2*p + (p*(p+1)/2))
 
-def rvs(mu, sigma, gamma, size=1):
+def rvs(mu, sigma, gamma, size=1, random_state=None):
 
-    return skewlaplacemix.sample_skewlaplace(mu, sigma, gamma, size)
+    return skewlaplacemix.sample_skewlaplace(mu, sigma, gamma, size, random_state=random_state)
 
 def mean(mu, sigma, gamma):
     """
@@ -44,14 +44,16 @@ def var(mu, sigma, gamma):
     gamma: shape (p,)
 
     Returns the 'variance' or second-moment matrix of dimension (p, p).
-    Often used in GH-like families: (p+1)*(sigma + gamma gamma^T).
+    Under the MVSL parameterization used here,
+    X = mu + W gamma + sqrt(W) Z, Z ~ N(0, sigma),
+    W ~ Gamma((p+1)/2, scale=2). Therefore
+    Var(X) = (p+1) * (sigma + 2 gamma gamma^T).
     """
     p = len(mu)
     # Outer product of gamma with itself => shape (p,p)
     gamma_outer = np.outer(gamma, gamma)
 
-    # (p+1)*(sigma + gamma gamma^T)
-    return (p + 1) * (sigma + gamma_outer)
+    return (p + 1) * (sigma + 2.0 * gamma_outer)
 
 
 def fit(x):
